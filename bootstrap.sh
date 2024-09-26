@@ -19,5 +19,14 @@ chmod -R a-w Project_FARSI_orig
 chmod -R ugo+r Project_FARSI_orig
 
 # prepare the conda environment
-conda env create -f environment.yml
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    echo "Detected Linux OS"
+    conda env create -f environment_linux.yml
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "Detected macOS"
+    conda env create -f environment_macos.yml
+else
+    echo "Unsupported OS: $OSTYPE"
+    exit 1
+fi
 conda activate artemis
