@@ -1,0 +1,134 @@
+--- ./Project_FARSI_orig/design_utils/components/workload.py
++++ ./Project_FARSI/design_utils/components/workload.py
+@@ -17,7 +17,7 @@
+ # This class is to model a task, that is the smallest software execution unit.
+ class Task:
+     task_id_for_debugging_static = 0
+-    def __init__(self, name, work, iteration_ctr =1, type="latency_based", throughput_info = {}):
++    def __init__(self, name:str, dag_id:int, parent_graph_arr_time:float, sr:float, sdr:float, work, iteration_ctr =1, type="latency_based", throughput_info = {}):
+         self.iteration_ctr = iteration_ctr
+         self.name = name
+         self.progress = 0  # progress percentage (how much of the task has been finished)
+@@ -45,6 +45,10 @@
+         self.__task_to_family_task_work_unit = {}  # task to family task unit of work. For example
+                                                    # work unit from bus and memory perspective is the burst size
+                                                    # (in bytes)
++        self.parent_graph_arr_time = parent_graph_arr_time
++        self.dag_id = dag_id
++        self.sr = sr
++        self.sdr = sdr
+         self.burst_size = config.default_burst_size
+ 
+         self.type = type
+@@ -100,7 +104,10 @@
+     #       pick one off the children at random.
+     # ---------------
+     def sample_child(self):
+-        random.seed(datetime.now().microsecond)
++        if (config.DEBUG_FIX):
++            random.seed(0)
++        else:
++            random.seed(datetime.now().microsecond)
+         return random.choice(self.get_children())
+ 
+     # ---------------
+@@ -109,7 +116,10 @@
+     # ---------------
+     def sample_self_task_work(self):
+         time.sleep(.00005)
+-        np.random.seed(datetime.now().microsecond)
++        if (config.DEBUG_FIX):
++            np.random.seed(0)
++        else:
++            np.random.seed(datetime.now().microsecond)
+         task_work = [task_work for task_work, work_prob in self.get_task_work_distribution()]
+         work_prob = [work_prob for task_work, work_prob in self.get_task_work_distribution()]
+         return np.random.choice(task_work, p=work_prob)
+@@ -122,7 +132,10 @@
+     #       child: task's child
+     # ---------------
+     def sample_self_to_child_task_work(self, child):
+-        np.random.seed(datetime.now().microsecond)
++        if (config.DEBUG_FIX):
++            np.random.seed(0)
++        else:
++            np.random.seed(datetime.now().microsecond)
+         task_to_child_work = [task_work for task_work, work_prob in self.get_task_to_child_work_distribution(child)]
+         work_prob = [work_prob for task_work, work_prob in self.get_task_to_child_work_distribution(child)]
+         return np.random.choice(task_to_child_work, p=work_prob)
+@@ -137,6 +150,7 @@
+         delete_later_ =  self.get_self_task_work()
+         self.updated_task_work_for_debug = True
+         self.__task_to_family_task_work[self] = self_work
++        # print(f"@@ self.__task_to_family_task_work[{self.name}] = {self_work}")
+         delete_later = self.get_self_task_work()
+         a = delete_later
+ 
+@@ -289,6 +303,7 @@
+     #       family_task: family task.
+     # ---------------
+     def get_self_to_family_task_work(self, family_task):
++        # print(f'@@ get_self_to_family_task_work({self.name}, {family_task.name}')
+         if family_task in self.get_children():
+             return self.__task_to_family_task_work[family_task]
+         elif family_task in self.get_parents():
+@@ -313,8 +328,6 @@
+             for family_task in self.get_children():
+                 total_work += self.__task_to_family_task_work[family_task]
+         return total_work
+-
+-
+     # return self to family task unit of work. For example
+     # work unit from bus and memory perspective is the burst size
+     # (in bytes)
+@@ -329,6 +342,7 @@
+         smallest_read = self.get_smallest_task_work_by_dir("read")
+         smallest_write = self.get_smallest_task_work_by_dir("write")
+         smallest_instructions = self.get_smallest_task_work_by_dir("loop")
++        # print(f"@@ sm_read {smallest_read}, sm_write {smallest_write}, sm_inst {smallest_instructions}")
+ 
+         dice_factor = math.floor(smallest_read/block_size)  # use read,# this is just decided. Doesn't have to be this. Just had to pick something
+ 
+@@ -346,8 +360,10 @@
+     # based on the some reference work unit (same as block_size) determine the rest of the
+     # work units.
+     def calc_work_unit(self):
++        # print(f"@@ >>>>>> TASK Name {self.name}")
+         dice_factor = self.set_dice_factor(self.burst_size)
+         for family in self.get_family():
++            # print(f"@@ >>>>>> family member {family.name}")
+             self.__task_to_family_task_work_unit[family] = int(self.get_self_to_family_task_work(family)/dice_factor)
+             assert(self.get_self_to_family_task_work(family)/dice_factor > .1)
+ 
+@@ -448,7 +464,10 @@
+         """
+         if self.get_self_task_work() == 0: # dummy tasks
+             return 1
+-        return self.get_self_to_family_task_work(family_task)/self.get_self_task_work()
++        a = self.get_self_to_family_task_work(family_task)
++        b = self.get_self_task_work()
++        # print(f"@@ WORK RATIO TASK {family_task.name}/{self.name} = {a/b} = get_self_to_family_task_work ({a}) / get_self_task_work ({b})")
++        return a/b
+ 
+     # ---------------
+     # Functionality:
+@@ -467,7 +486,10 @@
+         return self.__parents + self.__children
+ 
+     def is_task_dummy(self):
+-        return "souurce" in self.name or "siink" in self.name or "dummy_last" in self.name
++        return "souurce" in self.name or "siink" in self.name or "DummyLast" in self.name
++
++    def is_task_dummy_but_not_souurce(self):
++        return "siink" in self.name or "DummyLast" in self.name
+ 
+ 
+ # Task Graph for the workload.
+@@ -569,6 +591,7 @@
+ # This class emulates the software workload containing the task set.
+ class Workload:
+     def __init__(self, input_file="workload.json", mode=""):
++        # print(f"@@ $$ init Workload, {input_file}, {mode}")
+         self.tasks = []  # set of tasks.
+         self.input_file = input_file  # if task reads from a file to be populated. Not supported yet.
+         if mode == "from_json":

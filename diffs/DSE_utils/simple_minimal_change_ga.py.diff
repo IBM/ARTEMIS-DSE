@@ -1,0 +1,58 @@
+--- ./Project_FARSI_orig/DSE_utils/simple_minimal_change_ga.py
++++ ./Project_FARSI/DSE_utils/simple_minimal_change_ga.py
+@@ -47,8 +47,11 @@
+     global bus_DB
+     global memory_DB
+     global ip_DB
+-    time.sleep(.00001)
+-    random.seed(datetime.now().microsecond)
++    if (config.DEBUG_FIX):
++        random.seed(0)
++    else:
++        time.sleep(.00001)
++        random.seed(datetime.now().microsecond)
+     # for mating or mutation
+     #block_choice = random.choice(block_to_choose_from)
+     #alternate_block_val = random.choice(eval(block_choice+"_DB"))
+@@ -84,8 +87,11 @@
+ def mate_dp(individual1, individual2):
+     # register the crossover operator
+     # pick a random index and swap
+-    time.sleep(.00001)
+-    random.seed(datetime.now().microsecond + 10)
++    if (config.DEBUG_FIX):
++        random.seed(0)
++    else:
++        time.sleep(.00001)
++        random.seed(datetime.now().microsecond + 10)
+     rand_idx = random.choice(list(range(0, len(individual1[0]))))
+     individual1_el = individual1[0][rand_idx]
+     individual1[0][rand_idx] = individual2[0][rand_idx]
+@@ -97,8 +103,11 @@
+ def mutate_dp(individual1, indpb):
+     # register the crossover operator
+     # pick a random index and swap
+-    time.sleep(.00001)
+-    random.seed(datetime.now().microsecond + 50)
++    if (config.DEBUG_FIX):
++        random.seed(0)
++    else:
++        time.sleep(.00001)
++        random.seed(datetime.now().microsecond + 50)
+     rand_idx = random.choice(list(range(0, len(individual1[0]))))
+     individual1[0][rand_idx] = random.choice(list(range(40, 600)))
+ 
+@@ -115,8 +124,11 @@
+ #----------
+ 
+ def main():
+-    time.sleep(.00001)
+-    random.seed(datetime.now().microsecond + 70)
++    if (config.DEBUG_FIX):
++        random.seed(0)
++    else:
++        time.sleep(.00001)
++        random.seed(datetime.now().microsecond + 70)
+ 
+     # CXPB  is the probability with which two individuals
+     #       are crossed

@@ -1,0 +1,158 @@
+--- ./Project_FARSI_orig/design_utils/components/scheduling.py
++++ ./Project_FARSI/design_utils/components/scheduling.py
+@@ -2,8 +2,11 @@
+ #This source code is licensed under the MIT license found in the
+ #LICENSE file in the root directory of this source tree.
+ 
++from asyncore import read
+ import json
+ import os
++from abc import ABCMeta, abstractmethod
++from pprint import pprint
+ from settings import config
+ from design_utils.components.workload import *
+ 
+@@ -78,4 +81,140 @@
+         for el in self.task_to_pe_block_schedule_list_sorted:
+             if task.name == el.task.name:
+                 return el
+-        raise Exception("too many or none tasks scheduled with " + task.name + "name")
+\ No newline at end of file
++        raise Exception("too many or none tasks scheduled with " + task.name + "name")
++
++
++class BaseSchedulingPolicy:
++
++    __metaclass__ = ABCMeta
++
++    @abstractmethod
++    def init(self, farsi_mode, perf_sim, hardware_graph, abs_deadlines_per_workload=None): pass
++
++    @abstractmethod
++    def assign_kernel_to_block(self, clock_time, kernels_to_schedule, scheduled_kernels, yet_to_schedule_kernels, task_to_mappable_pe): pass
++
++    @abstractmethod
++    def remove_kernel_from_block(self, clock_time, server): pass
++
++    @abstractmethod
++    def output_final_stats(self, clock_time): pass    
++
++    def reschedule_task_to_block(self, clock_time, hardware_graph, dest_blck, kernel):
++        # Arrival Time,Schedule Time,DAG ID,Task Name,Block Name,Est Exec Time
++        if config.PRINT_SCHEDULE:
++            print(f"@@ {kernel.arrival_time},{clock_time},{kernel.dag_id},{kernel.task_name},{dest_blck.instance_name},{self.perf_sim.get_estimated_latency(kernel, dest_blck)}")
++        
++        # prevent migrating to yourself
++        src_blck = kernel.get_ref_block()
++
++        # if we are considering write remapping in the scheduler, we may want to remap a task based on dynamic traffic which may still be mapped to the same PE
++        if not config.DYN_SCHEDULING_MEM_REMAPPING and src_blck.instance_name == dest_blck.instance_name:
++            return
++        
++        # print(f"{__file__.split('/')[-1]}: Rescheduling task: {kernel.task_name} from src: {src_blck.instance_name} to dst: {dest_blck.instance_name}")    
++        
++        ic_blocks = kernel.get_ic_blocks()
++        task = kernel.get_task()
++        # unpipe the tasks of the previous blocks that were assigned for this task
++        former_blks = hardware_graph.get_blocks_of_task(task)
++        hardware_graph.unpipe_design_for_task(task, former_blks)
++
++        # Unload IC only
++        for block in ic_blocks:
++            # print(f"{__file__.split('/')[-1]}: Unloading task, dir: {[(t.name, d) for t, d in block.get_task_dir_by_task_name(task)]} from block: {block.instance_name}")
++            task_dirs = block.get_task_dir_by_task_name(task)
++            for task_dir in task_dirs:
++                block.unload(task_dir)
++
++        # Unload src PE
++        assert src_blck.type == "pe"
++        # print(f"{__file__.split('/')[-1]}: Unloading task, dir: {src_blck.get_task_dir_by_task_name(task)[0]} from block: {src_blck.instance_name}")
++        src_blck.unload((task, "loop_back"))
++
++        # Load dest blck with task
++        dest_blck.load_improved(task, task)
++
++        # Load buses
++        # we were previously loading all DMs into all mems, which shouldn't be done
++        # e.g., in cases where two children reside in different memories, they should be loaded onto different read mems
++        child_tasks, parent_tasks = {}, {}
++        block_dir_workRatio_dict = kernel.get_task_to_blocks_map().block_dir_workRatio_dict
++        for block_dir, workRatio in block_dir_workRatio_dict.items():
++            block, dir_ = block_dir
++            parents_or_children = [self.perf_sim.task_name_to_task_dict[t_name] for t_name in workRatio.keys()]
++            if block.type == "mem":
++                if dir_ == "write":
++                    child_tasks[block] = parents_or_children
++                elif dir_ == "read":
++                    parent_tasks[block] = parents_or_children
++
++        kernels_to_update = {kernel} # add this kernel itself first
++
++        # don't care about writes out of dummyLast, souurce or siink nodes
++        if config.DYN_SCHEDULING_MEM_REMAPPING and not task.is_task_dummy():
++            all_mem_blocks = self.perf_sim.design.get_hardware_graph().get_blocks_of_type("mem")
++            if len(all_mem_blocks) >= 1:
++                write_mem_xchange_list = self.perf_sim.remap_write_mems_for_lat_opt(kernel, dest_blck, all_mem_blocks)
++                # if write_mem_xchange_list:
++                #     print(f"Remapping: {[(task.name + '->' + t_name, src_b.instance_name, dst_b.instance_name) for t_name, src_b, dst_b in  write_mem_xchange_list]}")
++
++                # we want to swap task->child_task from src_mem to dst_mem
++                for child_task_name, src_mem, dst_mem in write_mem_xchange_list:
++                    child_task = self.perf_sim.task_name_to_task_dict[child_task_name]
++                    # add child kernels whose bookkeeping data we'd need to update
++                    kernels_to_update.add(self.perf_sim.design.get_kernel_by_task_name(child_task))
++
++                    child_tasks[src_mem].remove(child_task)
++                    if dst_mem not in child_tasks: child_tasks[dst_mem] = []
++                    child_tasks[dst_mem].append(child_task)
++
++                    # load and unload memories
++                    # print("\'=========== BEFORE =============\'")
++                    # print("Old mem"); src_mem.print_tasks_dir_work_ratio()
++                    # print("New mem"); dst_mem.print_tasks_dir_work_ratio()
++                    src_mem.unload_improved(child_task, task, "read")   # unload read
++                    src_mem.unload_improved(task, child_task, "write")  # unload write
++                    dst_mem.load_improved(task, child_task)  # load memory with tasks
++                    dst_mem.load_improved(child_task, task)  # load memory with tasks
++                    # print("\'=========== AFTER =============\'")
++                    # print("Old mem"); src_mem.print_tasks_dir_work_ratio()
++                    # print("New mem"); dst_mem.print_tasks_dir_work_ratio()
++
++        # load all buses
++        for mem, parents in parent_tasks.items():
++            buses = hardware_graph.get_path_between_two_vertices(dest_blck, mem)[1:-1]
++            for bus in buses:
++                for parent in parents:
++                    bus.load_improved(task, parent)
++        for mem, children in child_tasks.items():
++            buses = hardware_graph.get_path_between_two_vertices(dest_blck, mem)[1:-1]
++            for bus in buses:
++                for child in children:
++                    bus.load_improved(task, child)
++
++        for k in kernels_to_update:
++            if k == kernel:
++                cand_task = task
++            else:
++                cand_task = k.task
++            blocks_dir_work_ratio = {}
++            for block in hardware_graph.get_blocks():
++                for task_dir, work_ratio in block.get_tasks_dir_work_ratio().items():   # get the task to task work ratio (gables)
++                    temp_task, dir = task_dir
++                    if temp_task == cand_task:
++                        blocks_dir_work_ratio[(block, dir)] = work_ratio
++                        
++            k.update_blocks_dir_work_ratio(blocks_dir_work_ratio)
++            # if task.name == "VitPre_x1_3_5":
++            #     print(f"\t>>> Updated kernel {k.task_name} blocks_dir_work_ratio")
++            #     k.print_blocks_dir_work_ratio()
++            #     print("")
++            # hardware_graph.pipe_design_for_task(cand_task, hardware_graph.get_blocks_of_task(cand_task))
++
++        # update pipes for this kernel's task
++        hardware_graph.pipe_design_for_task(task, hardware_graph.get_blocks_of_task(task))
++        for block in hardware_graph.blocks:
++            hardware_graph.pipe_clusters = []
++        hardware_graph.cluster_pipes()
++        
+\ No newline at end of file

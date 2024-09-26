@@ -1,0 +1,12 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/edge_detection_3_database - Task Itr Count.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/edge_detection_3_database - Task Itr Count.csv"
+@@ -0,0 +1,9 @@
++Task Name,number of iterations
++souurce,1
++gaussianSmoothing_3,1638400
++laplacianEstimate_3,1638400
++computeZeroCrossings_3,1638400
++computeGradient_3,1638400
++computeMaxGradientLeaf_3,256
++rejectZeroCrossings_3,1638400
++siink,1

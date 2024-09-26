@@ -1,0 +1,638 @@
+--- ./Project_FARSI_orig/specs/parse_libraries/parse_library.py
++++ ./Project_FARSI/specs/parse_libraries/parse_library.py
+@@ -10,12 +10,14 @@
+ from specs.LW_cl import *
+ import pandas as pd
+ import itertools
++from pprint import pprint
+ 
+ # ------------------------------
+ # Functionality:
+ #   parse the csv file and return a dictionary containing the hardware graph
+ # ------------------------------
+ def parse_hardware_graph(hardware_graph_file):
++    print(f"@@ Parsing hardware graph from file: {hardware_graph_file}")
+     if not os.path.exists(hardware_graph_file):
+         return ""
+ 
+@@ -40,7 +42,7 @@
+                 continue
+             else:
+                 hardware_graph_dict[block_name][child_block_name] = float(data_movement)
+-
++    # pprint(hardware_graph_dict)
+     return hardware_graph_dict
+ 
+ 
+@@ -116,11 +118,11 @@
+ # Functionality:
+ #   file finding helper
+ # ------------------------------
+-def get_full_file_name(partial_name, file_list):
+-    for file_name in file_list:
+-        if partial_name == file_name:
+-            return file_name
+-    print("file with the name of :" + partial_name + " doesnt exist")
++# def get_full_file_name(partial_name, file_list):
++#     for file_name in file_list:
++#         if partial_name == file_name:
++#             return file_name
++#     print("file with the name of :" + partial_name + " doesnt exist")
+ 
+ 
+ def get_block_clock_freq(library_dir, input_file_name):
+@@ -153,22 +155,38 @@
+ # Functionality:
+ #   parse the task graph csv and generate FARSI digestible task graph
+ # ------------------------------
+-def gen_task_graph(library_dir, prefix, misc_knobs):
++def gen_task_graph(library_dir, wrkld_id, wrkld_arr_time, prefix, misc_knobs):
++    assert wrkld_arr_time >= 0.
+     tasksL: List[TaskL] = []
+ 
+     # get files
+-    file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
+-    data_movement_file_name = get_full_file_name(prefix + "Task Data Movement.csv", file_list)
+-    IP_perf_file_name = get_full_file_name(prefix + "Task PE Performance.csv", file_list)
+-    Block_char_file_name = get_full_file_name("misc_database - "+ "Block Characteristics.csv", file_list)
++    # file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
++    # data_movement_file_name = get_full_file_name(prefix + "Task Data Movement.csv", file_list)
++    # IP_perf_file_name = get_full_file_name(prefix + "Task PE Performance.csv", file_list)
++    # Block_char_file_name = get_full_file_name("misc_database - "+ "Block Characteristics.csv", file_list)
++
++    data_movement_file_name = f"{library_dir}/{prefix}Task Data Movement.csv"
++    IP_perf_file_name = f"{library_dir}/{prefix}Task PE Performance.csv"
++    if config.domain == "miniera" or config.domain == "arvr":
++        Block_char_file_name = f"{library_dir}/misc_database - Block Characteristics.{config.domain}.csv"
++    else:
++        Block_char_file_name = f"{library_dir}/misc_database - Block Characteristics.csv"
++    task_sr_file_name = f"{library_dir}/{prefix}Task SR.csv"
++    task_sdr_file_name = f"{library_dir}/{prefix}Task SDR.csv"
++
++    for fname in [data_movement_file_name, IP_perf_file_name, Block_char_file_name, task_sr_file_name, task_sdr_file_name]:
++        assert os.path.exists(fname), f"{fname} not found!"
+ 
+     # collect data movement data
+-    data_movement_file_addr = os.path.join(library_dir, data_movement_file_name)
+-    task_graph_dict = parse_task_graph_data_movement(data_movement_file_addr)
++    # data_movement_file_addr = os.path.join(library_dir, data_movement_file_name)
++    # task_graph_dict = parse_task_graph_data_movement(data_movement_file_addr)
++    task_graph_dict = parse_task_graph_data_movement(data_movement_file_name)
+ 
+     # collect number of instructions for each tasks
+     work_dict = gen_task_graph_work_dict(library_dir, IP_perf_file_name, Block_char_file_name, misc_knobs)
+-    """ 
++    sr_dict = gen_task_sr_dict(task_sr_file_name)
++    sdr_dict = gen_task_sdr_dict(task_sdr_file_name)
++    """
+     for task_name, work in work_dict.items():
+         print(task_name+","+str(work))
+     exit(0)
+@@ -180,7 +198,7 @@
+         universal_burst_size = config.default_burst_size
+ 
+     for task_name_, values in task_graph_dict.items():
+-        task_ = TaskL(task_name=task_name_, work=work_dict[task_name_])
++        task_ = TaskL(task_name=task_name_, work=work_dict[task_name_], parent_graph_arr_time=wrkld_arr_time, dag_id=wrkld_id, sr= sr_dict[task_name_], sdr=sdr_dict[task_name_])
+         task_.set_burst_size(universal_burst_size)
+         task_.add_task_work_distribution([(work_dict[task_name_], 1)])
+         tasksL.append(task_)
+@@ -252,10 +270,10 @@
+         for key, value in dict_.items():
+             if key == "Task Name" or value == "":
+                 continue
+-            if key not in gpp_names:
+-                ip_name_modified = task_name + "_" + key
+-            else:
+-                ip_name_modified = key
++            # if key not in gpp_names:
++            #     ip_name_modified = task_name + "_" + key
++            # else:
++            ip_name_modified = key
+ 
+             task_metric_dict[task_name][ip_name_modified] = float(value)
+     return task_metric_dict
+@@ -266,7 +284,8 @@
+ #   get the performance of the task on the gpp
+ # ------------------------------
+ def parse_task_perf_on_ref_gpp(library_dir, IP_perf_file_name, Block_char_file_name):
+-    reader = csv.DictReader(open(os.path.join(library_dir, IP_perf_file_name), 'r'))
++    # reader = csv.DictReader(open(os.path.join(library_dir, IP_perf_file_name), 'r'))
++    reader = csv.DictReader(open(os.path.join(IP_perf_file_name), 'r'))
+     dict_list = []
+     for line in reader:
+         dict_list.append(line)
+@@ -290,7 +309,8 @@
+     type = type_sub_type[0]
+     sub_type = type_sub_type[1]
+     ref_gpp_dict = {}
+-    reader = csv.DictReader(open(os.path.join(library_dir, Block_char_file_name), 'r'))
++    # reader = csv.DictReader(open(os.path.join(library_dir, Block_char_file_name), 'r'))
++    reader = csv.DictReader(open(os.path.join(Block_char_file_name), 'r'))
+     blck_dict_list = []
+     for line in reader:
+         blck_dict_list.append(line)
+@@ -304,6 +324,7 @@
+                     blck_dict[dict_['Name']][key] = float(value)
+                 else:
+                     blck_dict[dict_['Name']][key] = value
++    # pprint(blck_dict)
+     return blck_dict
+ 
+ 
+@@ -321,6 +342,37 @@
+     print("need to at least have one ref gpp")
+     exit(0)
+ 
++# ------------------------------
++# Functionality:
++#   generate task to SR (Slack ratio) dict
++# ------------------------------
++def gen_task_sr_dict(task_sr_file_addr):
++    sr_dict = {} # per task, sr value
++    reader = csv.DictReader(open(task_sr_file_addr, 'r'))
++
++    for line in reader:
++        task_name = line['Task Name']
++        sr = line['Slack ratio']
++        sr_dict[task_name] = float(sr)
++
++    return sr_dict
++
++
++
++# ------------------------------
++# Functionality:
++#   generate task to SDR (sub-deadline ratio) dict
++# ------------------------------
++def gen_task_sdr_dict(task_sdr_file_addr):
++    sdr_dict = {} # per task, sdr value
++    reader = csv.DictReader(open(task_sdr_file_addr, 'r'))
++
++    for line in reader:
++        task_name = line['Task Name']
++        sdr = line['Sub-deadline ratio']
++        sdr_dict[task_name] = float(sdr)
++
++    return sdr_dict
+ 
+ # ------------------------------
+ # Functionality:
+@@ -329,12 +381,13 @@
+ def gen_task_graph_work_dict(library_dir, IP_perf_file_name, Block_char_file_name, misc_knobs):
+     #correction_values = gen_correction_values(workmisc_knobs)
+ 
+-    gpp_file_addr = os.path.join(library_dir, Block_char_file_name)
+-    IP_perf_file_addr = os.path.join(library_dir, IP_perf_file_name)
+-    gpp_perf_file_addr = os.path.join(library_dir, Block_char_file_name)
++    # gpp_file_addr = os.path.join(library_dir, Block_char_file_name)
++    # IP_perf_file_addr = os.path.join(library_dir, IP_perf_file_name)
++    # gpp_perf_file_addr = os.path.join(library_dir, Block_char_file_name)
+ 
+     #  parse the file and collect in a dictionary
+-    reader = csv.DictReader(open(IP_perf_file_addr, 'r'))
++    # reader = csv.DictReader(open(IP_perf_file_addr, 'r'))
++    reader = csv.DictReader(open(IP_perf_file_name, 'r'))
+     dict_list = []
+     for line in reader:
+         dict_list.append(line)
+@@ -362,14 +415,14 @@
+ # Functionality:
+ #   find all the ips (accelerators) for a task
+ # ------------------------------
+-def deduce_IPs(task_PEs, gpp_names):
++def deduce_IPs(task_PEs, freq, gpp_names):
+     ip_dict = {}
+     for task_PE in task_PEs:
+         for PE, cycles in task_PE.items():
+             if PE in gpp_names or PE in ip_dict.keys():
+                 continue
+             ip_dict[PE] = {}
+-            ip_dict[PE]["Freq"] = 100000000
++            ip_dict[PE]["Freq"] = freq
+ 
+     return ip_dict
+ 
+@@ -384,7 +437,7 @@
+             if task_PPA_dict["perf"][task_name][block] == 0 or (block not in task_PPA_dict["energy"][task_name].keys()):
+                 task_PPA_dict["power"][task_name][block] = 0
+             else:
+-                task_PPA_dict["power"][task_name][block] = task_PPA_dict["energy"][task_name][block]/task_PPA_dict["perf"][task_name][block]
++                task_PPA_dict["power"][task_name][block] = task_PPA_dict["energy"][task_name][block]/task_PPA_dict["perf"][task_name][block] #Only dynamic enerfy + task_PPA_dict["static_power"][task_name][block]
+ 
+ 
+ # based on various knobs correct for the parsed data.
+@@ -405,9 +458,9 @@
+     sram_freq_correction_ratio = 1
+     ic_freq_correction_ratio = 1
+     tech_node_SF = {}
+-    tech_node_SF["perf"] =1
+-    tech_node_SF["energy"] = {"gpp":1, "non_gpp":1}
+-    tech_node_SF["area"] = {"mem":1, "non_mem":1, "gpp":1}
++    tech_node_SF["perf"]   = 1
++    tech_node_SF["energy"] = {"ip":1, "gpp":1, "mem":1, "ic":1}
++    tech_node_SF["area"]   = {"ip":1, "gpp":1, "mem":1, "ic":1}
+ 
+     # if any of hte above values found in misc_knobs, over write
+     if "ip_freq_correction_ratio" in misc_knobs.keys():
+@@ -435,24 +488,24 @@
+     correction_dict["sram"]["work_rate"] = (1/tech_node_SF["perf"])*sram_freq_correction_ratio
+     correction_dict["ic"]["work_rate"] = (1/tech_node_SF["perf"])*ic_freq_correction_ratio
+ 
+-    correction_dict["ip"]["work_over_energy"] = (1/tech_node_SF["energy"]["non_gpp"])*1
++    correction_dict["ip"]["work_over_energy"] = (1/tech_node_SF["energy"]["ip"])*1
+     correction_dict["gpp"]["work_over_energy"] = (1/tech_node_SF["energy"]["gpp"])*1
+-    correction_dict["sram"]["work_over_energy"] = (1/tech_node_SF["energy"]["non_gpp"])*1
+-    correction_dict["dram"]["work_over_energy"] = (1/tech_node_SF["energy"]["non_gpp"])*1
+-    correction_dict["ic"]["work_over_energy"] = (1/tech_node_SF["energy"]["non_gpp"])*1
++    correction_dict["sram"]["work_over_energy"] = (1/tech_node_SF["energy"]["mem"])*1
++    correction_dict["dram"]["work_over_energy"] = (1/tech_node_SF["energy"]["mem"])*1
++    correction_dict["ic"]["work_over_energy"] = (1/tech_node_SF["energy"]["ic"])*1
+ 
+ 
+-    correction_dict["ip"]["work_over_area"] = (1/tech_node_SF["area"]["non_mem"])*1
++    correction_dict["ip"]["work_over_area"] = (1/tech_node_SF["area"]["ip"])*1
+     correction_dict["gpp"]["work_over_area"] = (1/tech_node_SF["area"]["gpp"])*1
+     correction_dict["sram"]["work_over_area"] = (1/tech_node_SF["area"]["mem"])*1
+     correction_dict["dram"]["work_over_area"] = (1/tech_node_SF["area"]["mem"])*1
+-    correction_dict["ic"]["work_over_area"] = (1/tech_node_SF["area"]["non_mem"])*1
++    correction_dict["ic"]["work_over_area"] = (1/tech_node_SF["area"]["ic"])*1
+ 
+-    correction_dict["ip"]["one_over_area"] = (1 / tech_node_SF["area"]["non_mem"]) * 1
++    correction_dict["ip"]["one_over_area"] = (1 / tech_node_SF["area"]["ip"]) * 1
+     correction_dict["gpp"]["one_over_area"] = (1 / tech_node_SF["area"]["gpp"]) * 1
+     correction_dict["sram"]["one_over_area"] = (1 / tech_node_SF["area"]["mem"]) * 1
+     correction_dict["dram"]["one_over_area"] = (1 / tech_node_SF["area"]["mem"]) * 1
+-    correction_dict["ic"]["one_over_area"] = (1 / tech_node_SF["area"]["non_mem"]) * 1
++    correction_dict["ic"]["one_over_area"] = (1 / tech_node_SF["area"]["ic"]) * 1
+ 
+     return correction_dict
+ 
+@@ -461,13 +514,13 @@
+ #   parse the hardware library
+ # ------------------------------
+ def parse_hardware_library(library_dir, IP_perf_file_name,
+-                           IP_energy_file_name, IP_area_file_name,
++                           IP_energy_file_name, IP_static_power_file_name, IP_area_file_name,
+                            Block_char_file_name, task_itr_cnt_file_name, workload, misc_knobs):
+ 
+     def gen_freq_range(misc_knobs, block_sub_type):
+         assert(block_sub_type in ["ip", "mem", "ic"])
+         if block_sub_type+"_spawn" not in misc_knobs.keys():
+-            result = [1]
++            result = [1.]
+         else:
+             spawn = misc_knobs[block_sub_type+"_spawn"]
+             result = spawn[block_sub_type+"_freq_range"]
+@@ -516,11 +569,18 @@
+ 
+         # cap the result by het maximum_spawn_ip
+         if len(result) > max_spawn_ip_by_loop_itr:
+-            result = copy.deepcopy(result[:max_spawn_ip_by_loop_itr-1])
++            if config.ADD_MAX_LLP_IP:
++                result = copy.deepcopy(result[:max_spawn_ip_by_loop_itr-1])
++            else:
++                result = copy.deepcopy(result[:max_spawn_ip_by_loop_itr])
++        # print(f"LLP: task_name: {task_name} task_itr_cnt: {task_itr_cnt} llps: {result}")
+ 
+         # add the maximum as well
+-        if max_num_itr not in result:
+-            result.append(max_num_itr)
++        if config.ADD_MAX_LLP_IP:
++            if max_num_itr not in result:
++                result.append(max_num_itr)
++        # print(task_name, task_itr_cnt[task_name], max_spawn_ip_by_loop_itr, result)
++        # pprint(misc_knobs)
+         return result
+         # return the range
+ 
+@@ -541,18 +601,20 @@
+     gpp_names = list(gpps.keys())
+     task_PPA_dict["perf_in_cycles"] = parse_task_PPA(library_dir, IP_perf_file_name, gpp_names)  # are provided in cycles at the moment,
+ 
+-    ips = deduce_IPs(list(task_PPA_dict["perf_in_cycles"].values()), gpp_names)
++    ips = deduce_IPs(list(task_PPA_dict["perf_in_cycles"].values()), ip_template["IP"]["Freq"], gpp_names)
+ 
+-    task_PPA_dict["perf"] = copy.deepcopy(task_PPA_dict["perf_in_cycles"])
++    task_PPA_dict["perf"] = copy.deepcopy(task_PPA_dict["perf_in_cycles"]) # convert to seconds
+     for task, task_PE in task_PPA_dict["perf_in_cycles"].items():
+         for PE, cycles in  task_PE.items():
+             if PE in ips:
+-                block_freq = ips[PE]["Freq"]
++                block_freq = float(ips[PE]["Freq"])
+             elif PE in gpps:
+-                block_freq = gpps[PE]["Freq"]
++                block_freq = float(gpps[PE]["Freq"])
+             task_PPA_dict["perf"][task][PE] = float(cycles)/block_freq
++            # print(f"@@ INIT task_PPA_dict[perf][{task}][{PE}] = {cycles:_}/{block_freq:_}")
+ 
+     task_PPA_dict["energy"] = parse_task_PPA(library_dir, IP_energy_file_name, gpp_names)
++    task_PPA_dict["static_power"] = parse_task_PPA(library_dir, IP_static_power_file_name, gpp_names)
+ 
+     # generate power here
+     convert_energy_to_power(task_PPA_dict)
+@@ -560,15 +622,23 @@
+     task_itr_cnt = parse_task_itr_cnt(library_dir, task_itr_cnt_file_name)
+ 
+     for task_name in task_work_dict.keys():
+-        IP_perfs =  task_PPA_dict["perf"][task_name]
+-        IP_energy =  task_PPA_dict["energy"][task_name]  # reported in miliwatt at the moment
+-        IP_area =  task_PPA_dict["area"][task_name]
++        IP_perfs  = task_PPA_dict["perf"][task_name]
++        IP_energy = task_PPA_dict["energy"][task_name]  # reported in miliwatt at the moment
++        IP_static_power = task_PPA_dict["static_power"][task_name]
++        # print(f"Task {task_name}, IP_static_power {IP_static_power}")
++        IP_area   = task_PPA_dict["area"][task_name]
++        # print(f"@@ task {task_name},IP_perfs {IP_perfs}, IP_area {IP_area}")
+         IP_names = list(task_PPA_dict["perf"][task_name].keys())
++        loop_itr_range_ = gen_loop_itr_range(task_name, task_itr_cnt, misc_knobs)
++        ip_freq_range = gen_freq_range(misc_knobs, "ip")
++        # print(f"@@ loop_itr_range = {loop_itr_range_}")
++        # print(f"@@ ip_freq_range = {ip_freq_range}")
+         for IP_name in IP_names:
+-            if IP_name in hardware_library_dict.keys():
+-                hardware_library_dict[IP_name]["mappable_tasks"].append(task_name)
+-                continue
++            # print(f"@@ parse_hardware_library: IP_name = {IP_name}, task_name = {task_name}")
+             if IP_name in gpps:
++                if IP_name in hardware_library_dict.keys():
++                    hardware_library_dict[IP_name]["mappable_tasks"].append(task_name)
++                    continue
+                 hardware_library_dict[IP_name] = {}
+                 hardware_library_dict[IP_name]["work_rate"] = correction_values["gpp"]["work_rate"]*float(gpps[IP_name]['Freq'])*float(gpps[IP_name]["dhrystone_IPC"])
+                 hardware_library_dict[IP_name]["work_over_energy"] = correction_values["gpp"]["work_over_energy"]*float(gpps[IP_name]['Inst_per_joul'])
+@@ -577,37 +647,54 @@
+                 hardware_library_dict[IP_name]["mappable_tasks"] = [task_name]
+                 hardware_library_dict[IP_name]["type"] = "pe"
+                 hardware_library_dict[IP_name]["sub_type"] = "gpp"
+-                hardware_library_dict[IP_name]["clock_freq"] = gpps[IP_name]["Freq"]
++                hardware_library_dict[IP_name]["clock_freq"] = float(gpps[IP_name]["Freq"])
+                 hardware_library_dict[IP_name]["BitWidth"] = gpps[IP_name]["BitWidth"]
+                 hardware_library_dict[IP_name]["loop_itr_cnt"] = 0
+                 hardware_library_dict[IP_name]["loop_max_possible_itr_cnt"] = 0
+                 hardware_library_dict[IP_name]["hop_latency"] = gpps[IP_name]["hop_latency"]
+                 hardware_library_dict[IP_name]["pipe_line_depth"] = gpps[IP_name]["pipe_line_depth"]
++                hardware_library_dict[IP_name]["static_power"] = float(IP_static_power[IP_name])
+                 #print("taskname: " + str(task_name) + ", subtype: gpp, power is"+ str(hardware_library_dict[IP_name]["work_rate"]/hardware_library_dict[IP_name]["work_over_energy"] ))
+             else:
+-                loop_itr_range_ = gen_loop_itr_range(task_name, task_itr_cnt, misc_knobs)
+-                ip_freq_range = gen_freq_range(misc_knobs, "ip")
+                 for loop_itr_cnt, ip_freq in itertools.product(loop_itr_range_, ip_freq_range):
+                     IP_name_refined = IP_name +"_"+str(loop_itr_cnt) + "_" + str(ip_freq)
++                    if IP_name_refined in hardware_library_dict.keys():
++                        hardware_library_dict[IP_name_refined]["mappable_tasks"].append(task_name)
++                        continue
+                     hardware_library_dict[IP_name_refined] = {}
+-                    hardware_library_dict[IP_name_refined]["work_rate"] = (ip_freq*loop_itr_cnt*correction_values["ip"]["work_rate"])*(task_work_dict[task_name]/(IP_perfs[IP_name]))
+-                    hardware_library_dict[IP_name_refined]["work_over_energy"] = (correction_values["ip"]["work_over_energy"]/loop_itr_cnt)*(task_work_dict[task_name]/(float(IP_energy[IP_name]*float((10**-15)))))
++                    try:
++                        hardware_library_dict[IP_name_refined]["work_rate"] = (ip_freq*loop_itr_cnt*correction_values["ip"]["work_rate"])*(task_work_dict[task_name]/(IP_perfs[IP_name]))
++                    except ZeroDivisionError as e:
++                        print(f"{e}: perf for IP {IP_name} for task {task_name} is 0!")
++                        exit(1)
++                    # print(f"@@ IP_name_refined IP_perf Work Rate")
++                    # we don't believe that energy will scale proportionally with LLP, although that was in the original equation
++                    hardware_library_dict[IP_name_refined]["work_over_energy"] = (correction_values["ip"]["work_over_energy"])*(task_work_dict[task_name]/(float(IP_energy[IP_name]*float((10**-15))))) # assume DFS, not DVFS, i.e., energy doesn't change with frequency
++
++                    # print("({}/{})*({}/({}*{}*10^-15))".format(correction_values["ip"]["work_over_energy"],loop_itr_cnt,task_work_dict[task_name],ip_freq,IP_energy[IP_name]))
++
++                    # hardware_library_dict[IP_name_refined]["energy"] = task_work_dict[task_name]/hardware_library_dict[IP_name_refined]["work_over_energy"]
++                    # hardware_library_dict[IP_name_refined]["power"] = hardware_library_dict[IP_name_refined]["energy"]/(IP_perfs[IP_name]/(ip_freq*loop_itr_cnt*correction_values["ip"]["work_rate"]))
++
+                     hardware_library_dict[IP_name_refined]["work_over_area"] = (correction_values["ip"]["work_over_area"]/loop_itr_cnt)*(task_work_dict[task_name])/(IP_area[IP_name]*(10**-12))
+                     hardware_library_dict[IP_name_refined]["one_over_area"] = (correction_values["ip"]["one_over_area"]/loop_itr_cnt)*(1.0)/(IP_area[IP_name]*(10**-12)) # convention is that workoverarea is 1/area for fix areas (like IPs and GPPs)
+                     hardware_library_dict[IP_name_refined]["mappable_tasks"] = [task_name]
+                     hardware_library_dict[IP_name_refined]["type"] = "pe"
+                     hardware_library_dict[IP_name_refined]["sub_type"] = "ip"
+-                    hardware_library_dict[IP_name_refined]["clock_freq"] = ip_template["IP"]["Freq"]*ip_freq
++                    hardware_library_dict[IP_name_refined]["clock_freq"] = float(ip_template["IP"]["Freq"])*ip_freq
+                     hardware_library_dict[IP_name_refined]["BitWidth"] = ip_template["IP"]["BitWidth"]
+                     hardware_library_dict[IP_name_refined]["loop_itr_cnt"] = loop_itr_cnt
+                     hardware_library_dict[IP_name_refined]["loop_max_possible_itr_cnt"] = task_itr_cnt[task_name]
+                     hardware_library_dict[IP_name_refined]["hop_latency"] = ip_template["IP"]["hop_latency"]
+                     hardware_library_dict[IP_name_refined]["pipe_line_depth"] = ip_template["IP"]["pipe_line_depth"]
+-                    #print("taskname: " + str(task_name) + ", subtype: ip, power is"+ str(hardware_library_dict[IP_name]["work_rate"]/hardware_library_dict[IP_name]["work_over_energy"] ))
++                    hardware_library_dict[IP_name_refined]["static_power"] = float(IP_static_power[IP_name]) * loop_itr_cnt / correction_values["ip"]["work_over_energy"] # this also needs tech node correction
++                    # print(f"IP_name_refined {IP_name_refined}, taskname: " + str(task_name) + ", subtype: ip, area is ", 1/hardware_library_dict[IP_name_refined]["one_over_area"], " energy ", hardware_library_dict[IP_name_refined]["energy"], " power ", hardware_library_dict[IP_name_refined]["power"], " dyn power is " + str(hardware_library_dict[IP_name_refined]["work_rate"]/hardware_library_dict[IP_name_refined]["work_over_energy"]), " static power " + str(hardware_library_dict[IP_name_refined]["static_power"]), flush=1)
++                    # print("@@", IP_name_refined, IP_perfs[IP_name], hardware_library_dict[IP_name_refined]["work_rate"], hardware_library_dict[IP_name_refined]["work_over_energy"], hardware_library_dict[IP_name_refined]["clock_freq"])
+ 
+     for blck_name, blck_value in mems.items():
+         mem_freq_range = gen_freq_range(misc_knobs, "mem")
+         for freq in mem_freq_range:
++            # print(f"@@ mem = {blck_name},{blck_value},{freq}")
+             IP_name_refined = blck_value['Name']+ "_" + str(freq)
+             hardware_library_dict[IP_name_refined] = {}
+             #hardware_library_dict[blck_value['Name']] = {}
+@@ -618,7 +705,7 @@
+             hardware_library_dict[IP_name_refined]["mappable_tasks"] = 'all'
+             hardware_library_dict[IP_name_refined]["type"] = "mem"
+             hardware_library_dict[IP_name_refined]["sub_type"] = blck_value['Subtype']
+-            hardware_library_dict[IP_name_refined]["clock_freq"] = freq*blck_value["Freq"]
++            hardware_library_dict[IP_name_refined]["clock_freq"] = freq*float(blck_value["Freq"])
+             hardware_library_dict[IP_name_refined]["BitWidth"] = blck_value["BitWidth"]
+             hardware_library_dict[IP_name_refined]["loop_itr_cnt"] = 0
+             hardware_library_dict[IP_name_refined]["loop_max_possible_itr_cnt"] = 0
+@@ -637,7 +724,7 @@
+             hardware_library_dict[IP_name_refined]["mappable_tasks"] = 'all'
+             hardware_library_dict[IP_name_refined]["type"] = "ic"
+             hardware_library_dict[IP_name_refined]["sub_type"] = "ic"
+-            hardware_library_dict[IP_name_refined]["clock_freq"] = freq*blck_value["Freq"]
++            hardware_library_dict[IP_name_refined]["clock_freq"] = freq*float(blck_value["Freq"])
+             hardware_library_dict[IP_name_refined]["BitWidth"] = blck_value["BitWidth"]
+             hardware_library_dict[IP_name_refined]["loop_itr_cnt"] = 0
+             hardware_library_dict[IP_name_refined]["loop_max_possible_itr_cnt"] = 0
+@@ -654,13 +741,14 @@
+         base_budget_scaling = budget_misc_knobs["base_budget_scaling"]
+ 
+     # get files
+-    file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
+-    misc_file_name = get_full_file_name(prefix + "Budget.csv", file_list)
++    # file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
++    # misc_file_name = get_full_file_name(prefix + "Budget.csv", file_list)
++    misc_file_name = f"{library_dir}/{prefix}Budget.csv"
++    assert os.path.exists(misc_file_name)
+ 
+     # get the time profile
+     df = pd.read_csv(os.path.join(library_dir, misc_file_name))
+     workloads = df['Workload']
+-    workload_last_task = {}
+ 
+     budgets_dict = {}
+     budgets_dict = defaultdict(dict)
+@@ -676,8 +764,7 @@
+             # but used for budget sweep for now
+             #budgets_dict["glass"][metric] = config.budget_dict["glass"][metric]
+         elif metric in ["latency"] or len(workloads_to_consider)==1:
+-            for idx in range(0, len(workloads)):
+-                workload_name = workloads[idx]
++            for workload_name in workloads:
+                 if workload_name == "all" or workload_name not in workloads_to_consider:
+                     continue
+                 if metric == "latency":
+@@ -700,20 +787,17 @@
+ 
+ 
+     # get files
+-    file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
+-    misc_file_name = get_full_file_name(prefix + "Last Tasks.csv", file_list)
++    # file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
++    # misc_file_name = get_full_file_name(prefix + "Last Tasks.csv", file_list)
++    misc_file_name = f"{library_dir}/{prefix}Last Tasks.csv"
++    os.path.exists(misc_file_name)
+ 
+-    # get the time profile
+-    df = pd.read_csv(os.path.join(library_dir, misc_file_name))
+-    workloads = df['workload']
+-    last_tasks = df['last_task']
++    df_dict = pd.read_csv(os.path.join(library_dir, misc_file_name), index_col=0).to_dict("index")
+     workload_last_task = {}
+-    for idx in range(0, len(workloads)):
+-        workload = workloads[idx]
+-        if workload not in workloads_to_consider:
+-            continue
+-        workload_last_task[workloads[idx]] = last_tasks[idx]
+-
++    for workload in workloads_to_consider:
++        # print(workload, df_dict)
++        assert workload in df_dict and "last_task" in df_dict[workload], f"last_task not defined for workload: {workload}"
++        workload_last_task[workload] = df_dict[workload]["last_task"]
+     return workload_last_task
+ 
+ # ------------------------------
+@@ -722,11 +806,14 @@
+ # ------------------------------
+ def gen_hardware_graph(library_dir, prefix = "") :
+     # get files
+-    file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
+-    hardware_graph_file_name = get_full_file_name(prefix + "Hardware Graph.csv", file_list)
+-    task_to_hardware_mapping_file_name = get_full_file_name(prefix + "Task to Hardware Mapping.csv", file_list)
+-    hardware_graph_file_addr =  os.path.join(library_dir, hardware_graph_file_name)
+-    hardware_graph_dict = parse_hardware_graph(hardware_graph_file_addr)
++    # file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
++    # hardware_graph_file_name = get_full_file_name(prefix + "Hardware Graph.csv", file_list)
++    # task_to_hardware_mapping_file_name = get_full_file_name(prefix + "Task to Hardware Mapping.csv", file_list)
++    hardware_graph_file_name = f"{library_dir}/{prefix}Hardware Graph.csv"
++    assert os.path.exists(hardware_graph_file_name), f"File {hardware_graph_file_name} does not exist!"
++    # hardware_graph_file_addr =  os.path.join(library_dir, hardware_graph_file_name)
++    # hardware_graph_dict = parse_hardware_graph(hardware_graph_file_addr)
++    hardware_graph_dict = parse_hardware_graph(hardware_graph_file_name)
+ 
+     return hardware_graph_dict
+ 
+@@ -737,10 +824,13 @@
+ # ------------------------------
+ def gen_task_to_hw_mapping(library_dir, prefix = "") :
+     # get files
+-    file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
+-    task_to_hardware_mapping_file_name = get_full_file_name(prefix + "Task To Hardware Mapping.csv", file_list)
+-    task_to_hardware_mapping_file_addr =  os.path.join(library_dir, task_to_hardware_mapping_file_name)
+-    task_to_hardware_mapping = parse_task_to_hw_mapping(task_to_hardware_mapping_file_addr)
++    # file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
++    # task_to_hardware_mapping_file_name = get_full_file_name(prefix + "Task To Hardware Mapping.csv", file_list)
++    task_to_hardware_mapping_file_name = f"{library_dir}/{prefix}Task To Hardware Mapping.csv"
++    assert os.path.exists(task_to_hardware_mapping_file_name), f"File {task_to_hardware_mapping_file_name} does not exist!"
++    # task_to_hardware_mapping_file_addr =  os.path.join(library_dir, task_to_hardware_mapping_file_name)
++    # task_to_hardware_mapping = parse_task_to_hw_mapping(task_to_hardware_mapping_file_addr)
++    task_to_hardware_mapping = parse_task_to_hw_mapping(task_to_hardware_mapping_file_name)
+ 
+     return task_to_hardware_mapping
+ 
+@@ -756,14 +846,29 @@
+ 
+ 
+     # get files
+-    file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
+-    data_movement_file_name = get_full_file_name(prefix + "Task Data Movement.csv", file_list)
+-    IP_perf_file_name = get_full_file_name(prefix + "Task PE Performance.csv", file_list)
+-    IP_energy_file_name = get_full_file_name(prefix +  "Task PE Energy.csv", file_list)
+-    IP_area_file_name = get_full_file_name(prefix +  "Task PE Area.csv", file_list)
+-    task_itr_cnt_file_name = get_full_file_name(prefix+ "Task Itr Count.csv", file_list)
+-    Block_char_file_name = get_full_file_name("misc_database - "+ "Block Characteristics.csv", file_list)
+-    common_block_char_file_name =  get_full_file_name("misc_database - "+ "Common Hardware.csv", file_list)
++    # file_list = [f for f in os.listdir(library_dir) if os.path.isfile(os.path.join(library_dir, f))]
++    # data_movement_file_name = get_full_file_name(prefix + "Task Data Movement.csv", file_list)
++    # IP_perf_file_name = get_full_file_name(prefix + "Task PE Performance.csv", file_list)
++    # IP_energy_file_name = get_full_file_name(prefix +  "Task PE Energy.csv", file_list)
++    # IP_static_power_file_name = get_full_file_name(prefix +  "Task PE Static Power.csv", file_list)
++    # IP_area_file_name = get_full_file_name(prefix +  "Task PE Area.csv", file_list)
++    # task_itr_cnt_file_name = get_full_file_name(prefix+ "Task Itr Count.csv", file_list)
++    # Block_char_file_name = get_full_file_name("misc_database - "+ "Block Characteristics.csv", file_list)
++    IP_perf_file_name = f"{library_dir}/{prefix}Task PE Performance.csv"
++    IP_energy_file_name = f"{library_dir}/{prefix}Task PE Energy.csv"
++    IP_static_power_file_name = f"{library_dir}/{prefix}Task PE Static Power.csv"
++    IP_area_file_name = f"{library_dir}/{prefix}Task PE Area.csv"
++    task_itr_cnt_file_name = f"{library_dir}/{prefix}Task Itr Count.csv"
++    if config.domain == "miniera" or config.domain == "arvr":
++        Block_char_file_name = f"{library_dir}/misc_database - Block Characteristics.{config.domain}.csv"
++    else:
++        Block_char_file_name = f"{library_dir}/misc_database - Block Characteristics.csv"
++    print(f"@@ Block characteristics file: {Block_char_file_name}")
++
++    for fname in [IP_perf_file_name, IP_energy_file_name,IP_static_power_file_name, IP_area_file_name, task_itr_cnt_file_name, Block_char_file_name]:
++        assert os.path.exists(fname), f"File does not exist: {fname}"
++
++    # common_block_char_file_name =  get_full_file_name("misc_database - "+ "Common Hardware.csv", file_list)
+ 
+     # get the time profile
+     #task_perf_file_addr = os.path.join(library_dir, IP_perf_file_name)
+@@ -777,12 +882,29 @@
+ 
+     # get the mapping and IP library
+     hardware_library_dict = parse_hardware_library(library_dir, IP_perf_file_name,
+-                                                   IP_energy_file_name, IP_area_file_name,
++                                                   IP_energy_file_name, IP_static_power_file_name, IP_area_file_name,
+                                                    Block_char_file_name, task_itr_cnt_file_name, workload, misc_knobs)
+     block_suptype = "gpp"  # default.
++
++    # generate map of all PEs to tasks that can run on them
++    pe_to_mappable_task_map = {}
++
++    # generate inverse map
++    task_to_mappable_pe_wr_map = {}
++    task_to_mappable_pe_subtype_map = {}
++    task_is_accelrable_map = {}
++
+     for IP_name, values in hardware_library_dict.items():
++        IP_work_rate = values['work_rate']
+         block_subtype = values['sub_type']
+         block_type = values['type']
++        # print(f"@@    {IP_name}, {block_type}, {block_subtype}")
++        if block_type == 'pe': #Get from input files
++            leakage_power = float(hardware_library_dict[IP_name]["static_power"])
++            # print(f"Setting leakage_power of {IP_name} to {leakage_power}")
++
++        else: #Get from cacti
++            leakage_power=""
+         blocksL.append(
+             BlockL(block_instance_name=IP_name, block_type=block_type, block_subtype=block_subtype,
+                    peak_work_rate_distribution = {hardware_library_dict[IP_name]["work_rate"]:1},
+@@ -791,11 +913,24 @@
+                    one_over_area_distribution = {hardware_library_dict[IP_name]["one_over_area"]:1},
+                    clock_freq=hardware_library_dict[IP_name]["clock_freq"], bus_width=hardware_library_dict[IP_name]["BitWidth"],
+                    loop_itr_cnt=hardware_library_dict[IP_name]["loop_itr_cnt"], loop_max_possible_itr_cnt=hardware_library_dict[IP_name]["loop_max_possible_itr_cnt"],
+-                   hop_latency=hardware_library_dict[IP_name]["hop_latency"], pipe_line_depth=hardware_library_dict[IP_name]["pipe_line_depth"],))
++                   hop_latency=hardware_library_dict[IP_name]["hop_latency"], pipe_line_depth=hardware_library_dict[IP_name]["pipe_line_depth"], leakage_power=leakage_power))
+ 
+         if block_type == "pe":
+-            for mappable_tasks in hardware_library_dict[IP_name]["mappable_tasks"]:
+-                task_to_block_map_ = TaskToPEBlockMapL(task_name=mappable_tasks, pe_block_instance_name=IP_name)
++            pe_to_mappable_task_map[IP_name] = hardware_library_dict[IP_name]["mappable_tasks"]
++            for mappable_task in hardware_library_dict[IP_name]["mappable_tasks"]:
++                if mappable_task not in task_to_mappable_pe_wr_map:
++                    task_to_mappable_pe_wr_map[mappable_task] = []
++                    task_to_mappable_pe_subtype_map[mappable_task] = []
++                task_to_mappable_pe_wr_map[mappable_task].append((IP_name, IP_work_rate))
++                task_to_mappable_pe_subtype_map[mappable_task].append(block_subtype)
++                task_to_block_map_ = TaskToPEBlockMapL(task_name=mappable_task, pe_block_instance_name=IP_name)
+                 pe_mapsL.append(task_to_block_map_)
+-
+-    return blocksL, pe_mapsL, pe_schedulesL
++    for task, blocks_mappable_to_task_subtype in task_to_mappable_pe_subtype_map.items():
++        accelrable = False
++        for block_subtype in blocks_mappable_to_task_subtype:
++            if block_subtype != "gpp":
++                accelrable = True
++                break
++        task_is_accelrable_map[task] = accelrable
++    del blocks_mappable_to_task_subtype
++    return blocksL, pe_mapsL, pe_schedulesL, task_to_mappable_pe_wr_map, task_is_accelrable_map, pe_to_mappable_task_map

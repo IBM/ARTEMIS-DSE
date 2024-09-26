@@ -1,0 +1,17 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/misc_database - Budget.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/misc_database - Budget.csv"
+@@ -0,0 +1,14 @@
++Workload,latency,power,area,cost
++audio_decoder,0.021,0.26,9e-05,1e-09
++edge_detection,0.034,0.26,9e-05,1e-09
++hpvm_cava,0.034,0.26,9e-05,1e-09
++synthetic,0.034,0.26,9e-05,1e-09
++edge_detection_1,0.034,0.26,9e-05,1e-09
++edge_detection_2,0.034,0.26,9e-05,1e-09
++edge_detection_3,0.034,0.26,9e-05,1e-09
++edge_detection_4,0.034,0.26,9e-05,1e-09
++simple_all_parallel,0.26,9e-05,0.08,
++SOC_example,0.26,9e-05,0.08,
++partial_SOC_example_hard,0.26,9e-05,0.08,
++SOC_example_1p_2r,0.26,9e-05,0.08,
++all,,0.26,9e-05,1e-09

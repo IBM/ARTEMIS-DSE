@@ -1,0 +1,646 @@
+--- ./Project_FARSI_orig/design_utils/des_handler.py
++++ ./Project_FARSI/design_utils/des_handler.py
+@@ -16,7 +16,7 @@
+ from DSE_utils.exhaustive_DSE import *
+ from visualization_utils.vis_hardware import *
+ import _pickle as cPickle
+-
++from pprint import pprint
+ # This class allows us to modify the design. Each design is applied
+ # a move to get transformed to another.
+ # Move at the moment has 4 different parts (metric, kernel, block, transformation) that needs to be
+@@ -92,7 +92,7 @@
+                 exact_optimization = self.get_customization_type(self.get_block_ref(), self.get_des_block())
+         elif self.get_transformation_name() in ["migrate"]:
+             exact_optimization = self.get_block_ref().type +"_"+"mapping"
+-        elif self.get_transformation_name() in ["split_swap", "split", "transfer", "routing"]:
++        elif self.get_transformation_name() in ["migrate_swap", "split_swap", "split", "transfer", "routing"]:
+             exact_optimization = self.get_block_ref().type +"_"+"allocation"
+         elif self.get_transformation_name() in ["transfer", "routing"]:
+             exact_optimization = self.get_block_ref().type +"_"+self.get_transformation_name()
+@@ -108,10 +108,10 @@
+ 
+ 
+         # which high level optimization targgeted: topology/mapping/tunning
+-        if self.get_transformation_name() in ["swap", "split_swap"]:
+-            high_level_optimization = "hardware_tunning"
++        if self.get_transformation_name() in ["swap", "split_swap", "migrate_swap"]:
++            high_level_optimization = "hardware_tuning"
+         elif self.get_transformation_name() in ["split_swap"]:
+-            high_level_optimization = "hardware_tunning;topology"
++            high_level_optimization = "hardware_tuning;topology"
+         elif self.get_transformation_name() in ["migrate"]:
+             high_level_optimization = "mapping"
+         elif self.get_transformation_name() in ["split_swap", "split", "transfer","routing"]:
+@@ -139,7 +139,7 @@
+             for el in self.locality_type:
+                 architectural_principle +=  el+";"
+             architectural_principle = architectural_principle[:-1]
+-        elif self.get_transformation_name() in ["split_swap", "swap"]:
++        elif self.get_transformation_name() in ["migrate_swap", "split_swap", "swap"]:
+             if "loop_iteration_modulation" in  exact_optimization:
+                 architectural_principle = "loop_level_parallelism"
+             else:
+@@ -293,7 +293,10 @@
+     # set the block that we will change the ref_block to.
+     def set_dest_block(self, block_):
+         self.dest_block = block_
++        self.swap_dest_block = block_
+ 
++    def set_swap_dest_block(self, block_):
++        self.swap_dest_block = block_
+ 
+     def get_customization_type(self, ref_block, imm_block):
+         return self.customization_type
+@@ -336,7 +339,8 @@
+             selected_metric_to_sort = 'peak_work_rate'
+         elif selected_metric == "power":
+             #selected_metric_to_sort = 'work_over_energy'
+-            selected_metric_to_sort = 'one_over_power'
++            # selected_metric_to_sort = 'one_over_power'
++            selected_metric_to_sort = 'one_over_total_power'
+         elif selected_metric == "area":
+             selected_metric_to_sort = 'one_over_area'
+         else:
+@@ -351,6 +355,15 @@
+     def get_tasks(self):
+         return self.tasks
+ 
++    def get_swap_des_block(self):
++        return self.swap_dest_block
++
++    def get_swap_des_block_name(self):
++        if self.swap_dest_block == "_":
++            return "_"
++        else:
++           return self.swap_dest_block.instance_name
++
+     def get_des_block(self):
+         return self.dest_block
+ 
+@@ -378,11 +391,11 @@
+         assert(not(self.transformation_name == "deadbeef")), "name is not initialized"
+         return self.transformation_name
+ 
+-    def get_block_ref(self):
++    def get_block_ref(self) -> Block:
+         assert(not(self.blck=="deadbeef")), "block is not initialized"
+         return self.blck
+ 
+-    def get_kernel_ref(self):
++    def get_kernel_ref(self) -> Kernel:
+         assert (not (self.krnel == "deadbeef")), "block is not initialized"
+         return self.krnel
+ 
+@@ -452,22 +465,22 @@
+             raise MoveNoDesignException
+             #return False
+ 
+-        # ---------------------
+-        # number of fronts sanity check
+-        # ---------------------
+-        pre_mvd_fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in pre_moved_ex.get_blocks()])
+-        pre_mvd_fronts_2 = sum([len(block.get_fronts("task_dir_work_ratio")) for block in pre_moved_ex.get_blocks()])
+-        if not pre_mvd_fronts_1 == pre_mvd_fronts_2:
+-            pre_mvd_fronts_1 = [block.get_fronts("task_name_dir") for block in pre_moved_ex.get_blocks()]
+-            pre_mvd_fronts_2 = [block.get_fronts("task_dir_work_ratio") for block in pre_moved_ex.get_blocks()]
+-            raise UnEqualFrontsError
+-
+-        mvd_fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in moved_ex.get_blocks()])
+-        mvd_fronts_2 = sum([len(block.get_fronts("task_dir_work_ratio")) for block in moved_ex.get_blocks()])
+-        if not mvd_fronts_1 == mvd_fronts_2:
+-            mvd_fronts_1 = [block.get_fronts("task_name_dir") for block in moved_ex.get_blocks()]
+-            mvd_fronts_2 = [block.get_fronts("task_dir_work_ratio") for block in moved_ex.get_blocks()]
+-            raise UnEqualFrontsError
++        # # ---------------------
++        # # number of fronts sanity check
++        # # ---------------------
++        # pre_mvd_fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in pre_moved_ex.get_blocks()])
++        # pre_mvd_fronts_2 = sum([len(block.get_fronts("task_dir_work_ratio")) for block in pre_moved_ex.get_blocks()])
++        # if not pre_mvd_fronts_1 == pre_mvd_fronts_2:
++        #     pre_mvd_fronts_1 = [block.get_fronts("task_name_dir") for block in pre_moved_ex.get_blocks()]
++        #     pre_mvd_fronts_2 = [block.get_fronts("task_dir_work_ratio") for block in pre_moved_ex.get_blocks()]
++        #     raise UnEqualFrontsError
++
++        # mvd_fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in moved_ex.get_blocks()])
++        # mvd_fronts_2 = sum([len(block.get_fronts("task_dir_work_ratio")) for block in moved_ex.get_blocks()])
++        # if not mvd_fronts_1 == mvd_fronts_2:
++        #     mvd_fronts_1 = [block.get_fronts("task_name_dir") for block in moved_ex.get_blocks()]
++        #     mvd_fronts_2 = [block.get_fronts("task_dir_work_ratio") for block in moved_ex.get_blocks()]
++        #     raise UnEqualFrontsError
+ 
+         # ---------------------
+         # block count sanity checks
+@@ -624,7 +637,8 @@
+         # assign buses (for both read and write) and mem for read
+         self.load_read_mem_and_ic_recursive(ex_dp, [], ex_dp.get_hardware_graph().get_task_graph().get_root(), [], None)
+         # prune whatever ic connection where there is no traffic on it
+-        self.disconnect_ics_with_no_shared_task(ex_dp)
++        if not config.CONSTRAIN_TOPOLOGY:
++            self.disconnect_ics_with_no_shared_task(ex_dp)
+ 
+ 
+     def disconnect_ics_with_no_shared_task(self, ex_dp):
+@@ -710,7 +724,7 @@
+             raise NoPEError
+         pe = pe_list[0]
+         get_work_ratio = self.database.get_block_work_ratio_by_task_dir
+-        buses = ex_dp.hardware_graph.get_path_between_two_vertecies(pe, mem)[1:-1]
++        buses = ex_dp.hardware_graph.get_path_between_two_vertices(pe, mem)[1:-1]
+         for bus in buses:
+             #bus.load((task, dir_), get_work_ratio(task, pe, dir_), father_task)
+             bus.load_improved(task, family_task)
+@@ -858,7 +872,7 @@
+     # possible implementations of DMA injection
+     # at the moment, it's comment out.
+     # TODO: uncomment and ensure it's correctness
+-    """ 
++    """
+         def inject_DMA_task_for_a_single_task(self, ex_dp:ExDesignPoint, task):
+             if config.VIS_GR_PER_GEN: vis_hardware(ex_dp)
+             task_s_DMA_s_src_dest_list = self.find_task_s_DMA_needs(ex_dp, task)
+@@ -886,7 +900,7 @@
+                 reads_work_ratio = src.get_task_s_work_ratio_by_task_and_dir(task, "read")
+                 # unload task from the src memory and the immediate bus connected to it
+ 
+-                buses = ex_dp.hardware_graph.get_path_between_two_vertecies(src, dest)[1:-1]
++                buses = ex_dp.hardware_graph.get_path_between_two_vertices(src, dest)[1:-1]
+                 for bus in buses:
+                     if (bus, task) not in bus_task_unloaded_list:
+                         bus.unload((task, "write"))
+@@ -981,7 +995,7 @@
+             workload_to_pe_block_schedule.task_to_pe_block_schedule_list_sorted.append(TaskToPEBlockSchedule(task, 0))
+ 
+         # convert to teh sim design
+-        return SimDesignPoint(ex_dp.get_hardware_graph(), workload_to_blocks_map, workload_to_pe_block_schedule)
++        return SimDesignPoint(ex_dp.get_hardware_graph(), self.database, workload_to_blocks_map, workload_to_pe_block_schedule)
+ 
+     # -------------------------------------------
+     # Functionality:
+@@ -993,6 +1007,7 @@
+         workload_to_blocks_map = WorkloadToHardwareMap()
+         # make task_to_block out of blocks
+         for block in blocks:
++            # print(f"@@ XYZ {block.instance_name}, {block.get_tasks_dir_work_ratio().items()}")
+             for task_dir, work_ratio in block.get_tasks_dir_work_ratio().items():   # get the task to task work ratio (gables)
+                 task, dir = task_dir
+                 task_to_blocks = workload_to_blocks_map.get_by_task(task)
+@@ -1001,6 +1016,10 @@
+                 else:
+                     task_to_blocks = TaskToBlocksMap(task, {(block, dir): work_ratio})
+                     workload_to_blocks_map.tasks_to_blocks_map_list.append(task_to_blocks)
++
++        # print("@@ @@@@@@@@@@@@@@@@@**************************************")
++        # [b.print() for b in workload_to_blocks_map.tasks_to_blocks_map_list]
++        # exit(1)
+         return workload_to_blocks_map
+ 
+     # generate light systems (i.e., systems that are not FARSI compatible, but have all the characterizations necessary
+@@ -1120,12 +1139,16 @@
+         # use the hw_g to generate the topology (connect blocks together)
+         block_seen = {}  # dictionary with key:blk_name, value of block object
+         for blk_name, children_names in hw_g.items():
++            if blk_name.startswith("I/O"):
++                print(f"[WARN] Ignoring block: {blk_name}")
++                continue
+             if blk_name not in block_seen.keys():  # generate and memoize
+                 blk = self.database.gen_one_block_by_name(blk_name)
+                 block_seen[blk_name] = blk
+             else:
+                 blk = block_seen[blk_name]
+             for child_name in children_names:
++                # print(f"@@ \tchild_name = {child_name}")
+                 if child_name not in block_seen.keys():  # generate and memoize
+                     child = self.database.gen_one_block_by_name(child_name)
+                     block_seen[child_name] = child
+@@ -1138,12 +1161,19 @@
+ 
+         # load the blocks with tasks
+         for blk_name, task_names in task_to_hw_mapping.items():
+-            blk = block_seen[blk_name]
++            # print(f"loading blk {blk_name} with tasks {task_names}")
++            try:
++                blk = block_seen[blk_name]
++            except:
++                print(f"Block {blk_name} read from task to HW mapping file not found in hardware graph. Please check the two files for inconsistencies.")
++                exit(1)
+             for task in task_names:
+                 task_parent_name = task[0]
+                 task_child_name = task[1]
+                 task_parent = self.database.get_task_by_name(task_parent_name)
+                 task_child = self.database.get_task_by_name(task_child_name)
++                # print(f"parent {task_parent_name}, child {task_child_name}")
++                # print([t.name for t in self.database.get_tasks()])
+                 blk.load_improved(task_parent, task_child)
+ 
+         # generate a hardware graph and load read mem and ic
+@@ -1417,7 +1447,11 @@
+         ic = self.database.sample_most_inferior_blocks_by_type(block_type="ic", tasks=self.__tasks)
+         pe = self.database.sample_most_inferior_SOC(pe, config.sorting_SOC_metric)
+         mem = self.database.sample_most_inferior_SOC(mem, config.sorting_SOC_metric)
+-        ic = self.database.sample_most_inferior_SOC(ic, "power")
++        ic = self.database.sample_most_inferior_SOC(ic, config.sorting_SOC_metric)
++        # print(f"@@ @#@# INIT DESIGN @#@#")
++        # print(f"@@ @#@# pe = {pe.instance_name} @#@#")
++        # print(f"@@ @#@# mem = {mem.instance_name} @#@#")
++        # print(f"@@ @#@# ic = {ic.instance_name} @#@#")
+ 
+         # connect blocks together
+         pe.connect(ic)
+@@ -1431,6 +1465,8 @@
+         self.load_tasks_to_read_mem_and_ic(ex_dp)
+         ex_dp.hardware_graph.update_graph()
+         ex_dp.hardware_graph.pipe_design()
++        # print([b.instance_name for b in ex_dp.hardware_graph.blocks])
++        # print([t.name for t in ex_dp.hardware_graph.get_all_tasks()])
+         return ex_dp
+ 
+     # ------------------------------
+@@ -1476,8 +1512,10 @@
+         imm_blck = self.database.cast(blkL)
+         return self.database.copy_SOC(imm_blck, block)
+ 
+-    def get_immediate_block_multi_metric_fast(self, block, metric, sorted_metric_dir, tasks):
+-        imm_blck_non_unique = self.database.up_sample_down_sample_block_multi_metric_fast(block, sorted_metric_dir, tasks)[0]  # get the first value
++    def get_immediate_block_multi_metric_fast(self, block, metric, sorted_metric_dir, move, selected_krnl, tasks):
++        # print(f"    get_immediate_block_multi_metric_fast:::: block {block.instance_name}, metric {metric}, move {move}, selected_krnl {selected_krnl.task_name}, tasks {[t.name for t in tasks]}, sorted_metric_dir:")
++        # pprint(sorted_metric_dir)
++        imm_blck_non_unique = self.database.up_sample_down_sample_block_multi_metric_fast(block, sorted_metric_dir, move, selected_krnl, tasks)[0]  # get the first value
+         blkL = self.database.cached_block_to_blockL[imm_blck_non_unique]
+         imm_blck = self.database.cast(blkL)
+         return self.database.copy_SOC(imm_blck, block)
+@@ -1547,16 +1585,19 @@
+                                                                            tasks)  # get the first value
+ 
+         imm_blcks_names = [blck.get_generic_instance_name() for blck in imm_blcks_non_unique]
++        # print(f"@@ imm_blcks_names = {imm_blcks_names}")
+         #all_compatible_blocks = [blck.get_generic_instance_name() for blck in self.database.find_all_compatible_blocks_fast(block.type, tasks)]
+ 
+         blocks_present = ex_dp.get_blocks()
+         result_blocks = []
+         for block_present in blocks_present:
++            # print(f"@@ block_present.get_generic_instance_name() = {block_present.get_generic_instance_name()}")
+             if not (block.instance_name == block_present.instance_name) and block_present.get_generic_instance_name() in imm_blcks_names:
+                result_blocks.append(block_present)
+ 
+         if len(result_blocks) == 0:
+             result_blocks = [block]
++        # print(f"@@ result_blocks = {[b.instance_name for b in result_blocks]}")
+         return result_blocks
+ 
+     def get_equal_immediate_block_present_multi_metric_fast(self, ex_dp, block, metric, sorted_metric_dir, tasks):
+@@ -1584,22 +1625,22 @@
+     #       hot_kernel_pos: position of the hot kenrel. Used for finding the hot kernel.
+     # ------------------------------
+     def move_to(self,move_name , sup_block, hot_block, des_tup, mode, hot_kernel_pos):
+-            if move_name == "swap":
+-                if not hot_block.type == "ic":
+-                    self.unload_buses(des_tup[0])  # unload buses
+-                else:
+-                    self.unload_read_buses(des_tup[0]) # unload buses
+-                self.swap_block(hot_block, sup_block)  # swap
+-                self.mig_cur_tasks_of_src_to_dest(hot_block, sup_block)  # migrate tasks over
+-                des_tup[0].hardware_graph.update_graph(block_to_prime_with=sup_block)  # update the hardware graph
+-                self.unload_buses(des_tup[0]) # unload buses
+-                self.unload_read_mem(des_tup[0]) # unload memories
+-                if config.VIS_GR_PER_GEN: vis_hardware(des_tup[0])
+-            elif move_name == "split":
+-                self.unload_buses(des_tup[0]) # unload buss
+-                self.reduce_contention(des_tup, mode, hot_kernel_pos) # reduce contention by allocating an extra block
++        if move_name == "swap":
++            if not hot_block.type == "ic":
++                self.unload_buses(des_tup[0])  # unload buses
+             else:
+-                raise Exception("move:" + move_name + " is not supported")
++                self.unload_read_buses(des_tup[0]) # unload buses
++            self.swap_block(hot_block, sup_block)  # swap
++            self.mig_cur_tasks_of_src_to_dest(hot_block, sup_block)  # migrate tasks over
++            des_tup[0].hardware_graph.update_graph(block_to_prime_with=sup_block)  # update the hardware graph
++            self.unload_buses(des_tup[0]) # unload buses
++            self.unload_read_mem(des_tup[0]) # unload memories
++            if config.VIS_GR_PER_GEN: vis_hardware(des_tup[0])
++        elif move_name == "split":
++            self.unload_buses(des_tup[0]) # unload buss
++            self.reduce_contention(des_tup, mode, hot_kernel_pos) # reduce contention by allocating an extra block
++        else:
++            raise Exception("move:" + move_name + " is not supported")
+ 
+ 
+     """
+@@ -1665,7 +1706,8 @@
+     def apply_move(self, des_tup, move_to_apply):
+         ex_dp, sim_dp = des_tup
+         blck_ref = move_to_apply.get_block_ref()
+-        #print("applying move  " +  move.name + " -----" )
++        # print("applying move  ")
++        # move_to_apply.print_info()
+         #pre_moved_ex = copy.deepcopy(ex_dp)  # this is just for move sanity checking
+         gc.disable()
+         pre_moved_ex = cPickle.loads(cPickle.dumps(ex_dp, -1))
+@@ -1673,16 +1715,40 @@
+ 
+         if move_to_apply.get_transformation_name() == "identity":
+             return ex_dp, True
+-        if move_to_apply.get_transformation_name() == "swap":
++        elif move_to_apply.get_transformation_name() == "migrate_swap":
+             if not blck_ref.type == "ic": self.unload_buses(ex_dp)  # unload buses
+             else: self.unload_read_buses(ex_dp)  # unload buses
+-            succeeded = self.swap_block(blck_ref, move_to_apply.get_des_block())
+             #succeeded = self.mig_cur_tasks_of_src_to_dest(move_to_apply.get_block_ref(), move_to_apply.get_des_block())  # migrate tasks over
++            # print(f"!! migrate {[t.name for t in move_to_apply.get_tasks()]} from {blck_ref.instance_name} to {move_to_apply.get_des_block().instance_name}")
+             succeeded = self.mig_tasks_of_src_to_dest(ex_dp, blck_ref,
+                                                       move_to_apply.get_des_block(), move_to_apply.get_tasks())
++            # print(f"!! swap {blck_ref.instance_name} with {move_to_apply.get_swap_des_block().instance_name}")
++            succeeded = self.swap_block(blck_ref, move_to_apply.get_swap_des_block())
++            remaining_task = list(set(blck_ref.get_tasks_of_block()) - set(move_to_apply.get_tasks()))
++            # assert len(remaining_task) == 1
++            succeeded = self.mig_tasks_of_src_to_dest(ex_dp, blck_ref,
++                                                      move_to_apply.get_swap_des_block(), remaining_task)
++            # print(f"!! migrate {[t.name for t in remaining_task]} from {blck_ref.instance_name} to {move_to_apply.get_swap_des_block().instance_name}")
+             self.unload_buses(ex_dp)  # unload buses
+             self.unload_read_mem(ex_dp)  # unload memories
+-            ex_dp.hardware_graph.update_graph(block_to_prime_with=move_to_apply.get_des_block())  # update the hardware graph
++            if config.CONSTRAIN_TOPOLOGY:
++                ex_dp.hardware_graph.update_graph_without_prunning(block_to_prime_with=move_to_apply.get_swap_des_block())  # update the hardware graph
++            else:
++                ex_dp.hardware_graph.update_graph(block_to_prime_with=move_to_apply.get_des_block())  # update the hardware graph
++            if config.DEBUG_SANITY:ex_dp.sanity_check() # sanity check
++        elif move_to_apply.get_transformation_name() == "swap":
++            if not blck_ref.type == "ic": self.unload_buses(ex_dp)  # unload buses
++            else: self.unload_read_buses(ex_dp)  # unload buses
++            succeeded = self.swap_block(blck_ref, move_to_apply.get_swap_des_block())
++            #succeeded = self.mig_cur_tasks_of_src_to_dest(move_to_apply.get_block_ref(), move_to_apply.get_des_block())  # migrate tasks over
++            succeeded = self.mig_tasks_of_src_to_dest(ex_dp, blck_ref,
++                                                      move_to_apply.get_des_block(), move_to_apply.get_tasks())
++            self.unload_buses(ex_dp)  # unload buses
++            self.unload_read_mem(ex_dp)  # unload memories
++            if config.CONSTRAIN_TOPOLOGY:
++                ex_dp.hardware_graph.update_graph_without_prunning(block_to_prime_with=move_to_apply.get_des_block())  # update the hardware graph
++            else:
++                ex_dp.hardware_graph.update_graph(block_to_prime_with=move_to_apply.get_des_block())  # update the hardware graph
+             if config.DEBUG_SANITY:ex_dp.sanity_check() # sanity check
+         elif move_to_apply.get_transformation_name() == "split":
+             self.unload_buses(ex_dp)  # unload buss
+@@ -2009,6 +2075,99 @@
+ 
+     # ------------------------------
+     # Functionality:
++    #       random clustering of the tasks (for split). To introduce stochasticity in the system.
++    # Variables:
++    #       residing_task_on_block: tasks that are already occupying the block (that we want to split
++    #       num_clusters: how many clusters to generate for migration.
++    # ------------------------------
++    def cluster_tasks_mappable_to_same_ip(self, ex_dp:ExDesignPoint, block_generic_instance_name:str, residing_tasks_on_pe:List[Task], task_ref:Kernel, num_clusters:int=2, swap_block_gen_name=None, mig_block_gen_name=None):
++        assert swap_block_gen_name != None
++        assert mig_block_gen_name != None
++
++        clusters:List[List[Task]] = [[] for i in range(num_clusters)]
++        # residing_tasks_on_pe_copy = residing_tasks_on_pe[:]
++        block_generic_name = block_generic_instance_name.split('_pe')[0]
++
++        if (config.DEBUG_FIX):
++            random.seed(0)
++        else:
++            time.sleep(.00001)
++            random.seed(datetime.now().microsecond)
++
++        # select tasks that can map to the same IP as task_ref
++        task_ref_name = task_ref.get_task_name()
++        # get current blocks that task_ref can be mapped to
++        # curr_mappable_pes = [b.instance_name for b in ex_dp.hardware_graph.get_blocks() if b.type == "pe"]
++        # mappable_pes = list(set(curr_mappable_pes) - set([block_instance_name]))  # exclude currently mapped block
++        # mappable_pes = list(set(self.database.task_to_mappable_pe_map[task_ref_name]) - set([block_generic_name]))  # exclude currently mapped block
++        # mappable_pes = self.database.task_to_mappable_pe_map[task_ref_name]
++        # print(f"## mappable_pes for task {task_ref_name} = {mappable_pes}")
++        # assert mappable_pes
++        # # mappable_pe_generic_name = random.choice(mappable_pes).split('_pe')[0]
++        # mappable_pe = random.choice(mappable_pes).split('_pe')[0]
++        # mappable_tasks_on_pe = self.database.pe_to_mappable_task_map[mappable_pe_generic_name]
++        # print(mappable_tasks_on_pe)
++        # exit(1)
++        # clusters[1] = [task for task in residing_tasks_on_pe if task.name in mappable_tasks_on_pe]
++        # print("== self.database.pe_to_mappable_task_map ==")
++        # pprint(self.database.pe_to_mappable_task_map)
++        # print("== self.database.task_to_mappable_pe_map ==")
++        # pprint(self.database.task_to_mappable_pe_map)
++
++        # print(f"mappable_tasks for PE to swap with ({swap_block_gen_name}) = {self.database.pe_to_mappable_task_map[swap_block_gen_name]}")
++        # print(f"residing_tasks on current PE = {[task.name for task in residing_tasks_on_pe]}")
++
++        idx = 0; dst_block_gen_name = mig_block_gen_name
++        if "IP" in swap_block_gen_name:
++            idx = 1; dst_block_gen_name = swap_block_gen_name
++            assert "A53" in mig_block_gen_name
++        elif "IP" in mig_block_gen_name:
++            idx = 0; dst_block_gen_name = mig_block_gen_name
++            assert "A53" in swap_block_gen_name
++
++        clusters[idx] = [task for task in residing_tasks_on_pe if task.name in self.database.pe_to_mappable_task_map[dst_block_gen_name]]
++        assert clusters[idx], f"{idx} {dst_block_gen_name}"
++
++        if len(clusters[idx]) > 1:
++            n = random.choice(range(0, len(clusters[idx])))
++            # print(f"@@ random n = {n}")
++            if n > 0:
++                random.shuffle(clusters[idx])
++                clusters[idx] = clusters[idx][:n]
++        # print(f"@@ clusters[{idx}]:")
++        # print([t.name for t in clusters[idx]])
++
++
++
++        # print(f"mappable_tasks for PE to migrate tasks to ({mig_block_gen_name}) = {self.database.pe_to_mappable_task_map[mig_block_gen_name]}")
++        # clusters[0] = [task for task in clusters[0] if task.name in self.database.pe_to_mappable_task_map[mig_block_gen_name]]
++        # assert clusters[0]
++        # print("@@ clusters[0]:")
++        # print([t.name for t in clusters[0]])
++
++
++
++        clusters[1-idx] = list(set(residing_tasks_on_pe) - set(clusters[idx]))
++        # print(f"@@ clusters[{1-idx}]:")
++        # print([t.name for t in clusters[1-idx]])
++
++        # # pick some random number of tasks to migrate
++        # cluster_to_keep = set()
++        # if len(clusters[0]) > 1:
++        #     num_of_tasks_to_keep = random.choice(range(1, len(clusters[0])))
++        #     # random.shuffle(clusters[0])
++        #     # clusters[0] = clusters[0][:num_of_tasks_to_migrate]
++        #     for idx in random.sample(range(1, len(clusters[0])), num_of_tasks_to_keep):
++        #         task = clusters[0][i]
++        #         if task.name in self.database.pe_to_mappable_task_map[swap_block_gen_name]:
++        #             cluster_to_keep.add(task)
++        # # remove the randomly picked tasks from list to migrate
++        # clusters[0] = list(set(clusters[0]) - cluster_to_keep)
++
++        # get rid of the empty clusters  (happens if num of clusters is one less than the total number of tasks)
++        return [cluster for cluster in clusters if cluster]
++    # ------------------------------
++    # Functionality:
+     #       Migrate all the tasks, from the known src to known destination block
+     # Variables:
+     #       dp:  design
+@@ -2016,7 +2175,7 @@
+     #       src_blck: source block, where task currently lives in.
+     #       tasks:  the tasks to migrate
+     # ------------------------------
+-    def mig_tasks_of_src_to_dest(self, dp: ExDesignPoint, src_blck, dest_blck, tasks):
++    def mig_tasks_of_src_to_dest(self, dp: ExDesignPoint, src_blck:Block, dest_blck:Block, tasks:List[Task]):
+ 
+         # sanity check
+         for task in tasks:
+@@ -2033,7 +2192,7 @@
+                     if cur_src_blck == src_blck:
+                         matched_block = True
+             if not matched_block:
+-                print("task does not exist int the block")
++                print("task does not exist in the block")
+                 raise NoMigrantError
+         for task in tasks:
+             self.mig_one_task(dest_blck, src_blck, task)
+@@ -2078,8 +2237,9 @@
+             tasks_left.append(task.name)
+         #print("blah blah tasks left on src block is " + str(tasks_left))
+ 
+-        if len(src_blck.get_tasks_of_block()) == 0:  # prunning out the block
+-            src_blck.disconnect_all()
++        if not config.CONSTRAIN_TOPOLOGY:
++            if len(src_blck.get_tasks_of_block()) == 0:  # prunning out the block
++                src_blck.disconnect_all()
+ 
+     # ------------------------------
+     # Functionality:
+@@ -2180,13 +2340,19 @@
+     #       block: block where tasks resides in.
+     #       num_clusters: how many clusters do we want to have.
+     # ------------------------------
+-    def cluster_tasks(self, ex_dp, sim_dp, block, selected_kernel, selection_mode):
++    def cluster_tasks(self, ex_dp, sim_dp, block:Block, selected_kernel, selection_mode, swap_block_gen_name=None, mig_block_gen_name=None):
++        # print(f"## cluster_tasks block = {block.instance_name}, selected_kernel = {selected_kernel.task_name}, selection_mode = {selection_mode}, swap_block_gen_name = {swap_block_gen_name}, mig_block_gen_name = {mig_block_gen_name}")
+         if selection_mode == "random":
+             return self.cluster_tasks_randomly(block.get_tasks_of_block())
+         elif selection_mode == "tasks_dependency":
+             return self.cluster_tasks_based_on_data_sharing(selected_kernel.get_task(), block.get_tasks_of_block(), 2)
+         elif selection_mode == "single":
+             return self.separate_a_task(block.get_tasks_of_block(), selected_kernel)
++        elif selection_mode == "mappable_to_same_ip":
++            # return self.cluster_tasks_mappable_to_same_ip(ex_dp, block.get_generic_instance_name(), block.get_tasks_of_block(), selected_kernel, 2, swap_block_gen_name, mig_block_gen_name)
++            temp = self.separate_a_task(block.get_tasks_of_block(), selected_kernel)
++            temp[0], temp[1] = temp[1], temp[0]
++            return temp
+         elif selection_mode == "single_serialism":
+             return [[selected_kernel.get_task()]]
+         #elif selection_mode == "batch":
+@@ -2204,14 +2370,15 @@
+     # Variables:
+     #       block: block where tasks resides in.
+     # ------------------------------
+-    def migrant_selection(self, ex_dp, sim_dp, block_after_unload, block_before_unload, selected_kernel, selection_mode):
++    def migrant_selection(self, ex_dp, sim_dp, block_after_unload, block_before_unload, selected_kernel, selection_mode, swap_block_gen_name=None, mig_block_gen_name=None):
++        # print(f"## selecting migrant(s) with mode {selection_mode}")
+         if config.DEBUG_FIX: random.seed(0)
+         else: time.sleep(.00001), random.seed(datetime.now().microsecond)
+-        try:
+-            clustered_tasks = self.cluster_tasks(ex_dp,sim_dp, block_after_unload, selected_kernel, selection_mode)
+-        except:
+-            print("migrant selection went wrong. This needs to be fixed. Most likely occurs with random (As opposed to arch-aware) transformation_selection_mode")
+-            return []
++        # try:
++        clustered_tasks = self.cluster_tasks(ex_dp,sim_dp, block_after_unload, selected_kernel, selection_mode, swap_block_gen_name, mig_block_gen_name)
++        # except:
++        #     print("migrant selection went wrong. This needs to be fixed. Most likely occurs with random (As opposed to arch-aware) transformation_selection_mode")
++        #     return []
+         return clustered_tasks[0]
+ 
+     # ------------------------------
+@@ -2220,13 +2387,19 @@
+     # Variables:
+     #      ex_dp: example design
+     #      block: block of interest
+-    #      mode: depracated. TODO: get rid of it.
+     # ------------------------------
+     def block_forkable(self, ex_dp, block):
+-        if len(block.get_tasks_of_block()) < config.num_clusters:
+-            return False
++        # we can still fork if there is one task on the current IC, because the scheduler can assign one or more tasks to the new IC
++        if config.DYN_SCHEDULING_MEM_REMAPPING:
++            if len(block.get_tasks_of_block()) < 1:
++                return False
++            else:
++                return True
+         else:
+-            return True
++            if len(block.get_tasks_of_block()) < config.num_clusters:
++                return False
++            else:
++                return True
+ 
+     def task_in_block(self, block, task_):
+         return (task_.name in [task.name for task in block.get_tasks_of_block()])
+@@ -2237,25 +2410,39 @@
+     # Variables:
+     #      ex_dp: example design
+     #      block: block of interest
+-    #      mode: deprecated. TODO: get rid of it.
+     # ------------------------------
+     def fork_block(self, ex_dp, block, migrant_tasks_non_filtered):
+ 
+         migrant_tasks = []  # filter the tasks that don' exist on the block. This usually happens because we might unload the bus/memory
+         # transformation gaurds
+-        if len(block.get_tasks_of_block()) < config.num_clusters:
+-            return False,""
++        if config.DYN_SCHEDULING_MEM_REMAPPING:
++            if len(block.get_tasks_of_block()) < 1:
++                return False,""
++            else:
++                for task__ in migrant_tasks_non_filtered:
++                    # if tasks to migrate does not exist on the src block
++                    if not(task__.name in [task.name for task in block.get_tasks_of_block()]):  # this only should occur for reads,
++                                                                                                # since we unload the reads
++                        continue
++                    else:
++                        migrant_tasks.append(task__)
+         else:
+-            for task__ in migrant_tasks_non_filtered:
+-                # if tasks to migrate does not exist on the src block
+-                if not(task__.name in [task.name for task in block.get_tasks_of_block()]):  # this only should occur for reads,
+-                                                                                            # since we unload the reads
+-                    continue
+-                else:
+-                    migrant_tasks.append(task__)
++            if len(block.get_tasks_of_block()) < config.num_clusters:
++                return False,""
++            else:
++                for task__ in migrant_tasks_non_filtered:
++                    # if tasks to migrate does not exist on the src block
++                    if not(task__.name in [task.name for task in block.get_tasks_of_block()]):  # this only should occur for reads,
++                                                                                                # since we unload the reads
++                        continue
++                    else:
++                        migrant_tasks.append(task__)
+ 
+         if len(migrant_tasks) == 0:
+             return False,""
++        
++        # print(f"## migrant_tasks_non_filtered = {[t.name for t in migrant_tasks_non_filtered]}")
++        # print(f"## migrant_tasks = {[t.name for t in migrant_tasks]}")
+ 
+         # find and attach a similar block
+         alloc_block = self.allocate_similar_block(block, migrant_tasks)
+@@ -2267,7 +2454,7 @@
+         ex_dp.hardware_graph.update_graph(block_to_prime_with=alloc_block)
+         if config.VIS_GR_PER_GEN: vis_hardware(ex_dp)
+ 
+-        ex_dp.check_mem_fronts_sanity()
++        # ex_dp.check_mem_fronts_sanity()
+         return True, alloc_block
+ 
+     # ------------------------------
+@@ -2536,4 +2723,4 @@
+         # connect/disconnect the clusters to the ics
+         for block in pe_mem_clusters[0]:
+             block.disconnect_all()
+-            original_ic.connect(block)
+\ No newline at end of file
++            original_ic.connect(block)

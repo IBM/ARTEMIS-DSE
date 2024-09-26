@@ -1,0 +1,6 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/SOC_example_1p_database - Budget.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/SOC_example_1p_database - Budget.csv"
+@@ -0,0 +1,3 @@
++Workload,latency,power,area,cost
++participants,0.021,,,
++all,,0.01,0.000003,0.000000001

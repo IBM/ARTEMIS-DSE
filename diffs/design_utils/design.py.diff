@@ -1,0 +1,1083 @@
+--- ./Project_FARSI_orig/design_utils/design.py
++++ ./Project_FARSI/design_utils/design.py
+@@ -8,11 +8,17 @@
+ from design_utils.components.scheduling import *
+ from design_utils.components.krnel import *
+ from design_utils.common_design_utils import  *
++from math import log
++from specs.data_base import DataBase
++from itertools import accumulate
++from typing import Tuple, List, Dict
+ import collections
+ import datetime
+ from datetime import datetime
+ from error_handling.custom_error import  *
++from pprint import pprint
+ import gc
++import pandas as pd
+ import statistics as st
+ if config.use_cacti:
+     from misc.cacti_hndlr import cact_handlr
+@@ -24,6 +30,7 @@
+ else:
+     raise NameError("Simulation method unavailable")
+ 
++MEM_LEAKAGE_POWER = True
+ 
+ # This class logs the insanity (opposite of sanity (check), so the flaw) with the design
+ class Insanity:
+@@ -119,18 +126,18 @@
+                         return neigh
+ 
+     # get hardware blocks of a design
+-    def get_blocks(self):
++    def get_blocks(self) -> List[Block]:
+         return self.hardware_graph.blocks
+ 
+     # get hardware blocks within a specific SOC of the design
+-    def get_blocks_of_SOC(self,SOC_type, SOC_id):
++    def get_blocks_of_SOC(self,SOC_type, SOC_id) -> List[Block]:
+         return [block for block in self.hardware_graph.blocks if block.SOC_type == SOC_type and SOC_id == SOC_id]
+ 
+     # get tasks (software tasks) of the design
+-    def get_tasks(self):
++    def get_tasks(self) -> List[Task]:
+         return self.hardware_graph.get_all_tasks()
+ 
+-    def get_tasks_of_SOC(self, SOC_type, SOC_id):
++    def get_tasks_of_SOC(self, SOC_type, SOC_id) -> List[Task]:
+         return [task for task in self.get_tasks() if task.SOC_type == SOC_type and SOC_id == SOC_id]
+ 
+     # samples the task distribution within the hardware graph.
+@@ -154,10 +161,10 @@
+         return self.valid
+ 
+     # delete this later. Used for debugging
+-    def check_mem_fronts_sanity(self):
+-        fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in self.get_blocks() if block.type == "mem"])
+-        fronts_2 = sum(
+-            [len(block.get_fronts("task_dir_work_ratio")) for block in self.get_blocks() if block.type == "mem"])
++    # def check_mem_fronts_sanity(self):
++    #     fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in self.get_blocks() if block.type == "mem"])
++    #     fronts_2 = sum(
++    #         [len(block.get_fronts("task_dir_work_ratio")) for block in self.get_blocks() if block.type == "mem"])
+ 
+ 
+     def check_system_ic_exist(self, block):
+@@ -212,13 +219,13 @@
+     def sanity_check(self):
+         insanity_list = [] # list of Inanities
+ 
+-        # fronts check
+-        fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in self.get_blocks() if block.type == "mem"])
+-        fronts_2 = sum([len(block.get_fronts("task_dir_work_ratio")) for block in self.get_blocks() if block.type== "mem"])
+-        if not fronts_1 == fronts_2:
+-            pre_mvd_fronts_1 = [block.get_fronts("task_name_dir") for block in self.get_blocks() if block.type == "mem"]
+-            pre_mvd_fronts_2 = [block.get_fronts("task_dir_work_ratio") for block in self.get_blocks() if block.type == "mem"]
+-            raise UnEqualFrontsError
++        # # fronts check
++        # fronts_1 = sum([len(block.get_fronts("task_name_dir")) for block in self.get_blocks() if block.type == "mem"])
++        # fronts_2 = sum([len(block.get_fronts("task_dir_work_ratio")) for block in self.get_blocks() if block.type== "mem"])
++        # if not fronts_1 == fronts_2:
++        #     pre_mvd_fronts_1 = [block.get_fronts("task_name_dir") for block in self.get_blocks() if block.type == "mem"]
++        #     pre_mvd_fronts_2 = [block.get_fronts("task_dir_work_ratio") for block in self.get_blocks() if block.type == "mem"]
++        #     raise UnEqualFrontsError
+ 
+         # all the tasks have pe and mem
+         for task in self.get_tasks():
+@@ -264,7 +271,8 @@
+                     insanity.set_name("no_bus")
+                     insanity_list.append(insanity)
+                     print(insanity.gen_msg())
+-                    raise NoBusError
++                    if not config.USE_CUST_SCHED_POLICIES and len(block.get_tasks_of_block()) != 0: # can happen if scheduler in exploration loop
++                        raise NoBusError
+                     #break
+ 
+         # every bus needs to have at least one pe and mem
+@@ -278,9 +286,10 @@
+ 
+                 if len(connectd_mems) == 0 and not system_ic_exist:
+                     insanity = Insanity("_",block, "bus_with_no_mem")
+-                    print(insanity.gen_msg())
++                    # print(insanity.gen_msg())
+                     if self.hardware_graph.generation_mode == "user_generated":
+-                        print("deactivated Bus with No memory error, since hardware graph was directly user generated/parsed ")
++                        # print("deactivated Bus with No memory error, since hardware graph was directly user generated/parsed ")
++                        pass
+                     else:
+                         raise BusWithNoMemError
+                     """
+@@ -319,18 +328,18 @@
+                 raise NotEnoughIPOfCertainType
+                 #break
+ 
+-       # every block should host at least one task
+-        for block in self.get_blocks():
+-            if block.type == "ic":   # since we unload
+-                continue
+-            if len(block.get_tasks_of_block()) == 0:
+-                print( "block: " + block.instance_name + " does not host any tasks")
+-                insanity = Insanity("_", "_", "none")
+-                insanity.set_block(block)
+-                insanity.set_name("no_task")
+-                insanity_list.append(insanity)
+-                print(insanity.gen_msg())
+-                raise BlockWithNoTaskError
++        # # every block should host at least one task -- UPDATE: no longer the case
++        # for block in self.get_blocks():
++        #     if block.type == "ic":   # since we unload
++        #         continue
++        #     if len(block.get_tasks_of_block()) == 0:
++        #         print( "block: " + block.instance_name + " does not host any tasks")
++        #         insanity = Insanity("_", "_", "none")
++        #         insanity.set_block(block)
++        #         insanity.set_name("no_task")
++        #         insanity_list.append(insanity)
++        #         print(insanity.gen_msg())
++        #         raise BlockWithNoTaskError
+ 
+     # get blocks within the design (filtered by type)
+     def get_blocks_by_type(self, block_type):
+@@ -494,12 +503,12 @@
+                         output.write(prop_name_modified + ": " + str(prop_value) + ",\n")
+ 
+         else:
+-            print("mode:" + mode + " is not defind for apply_PA_knobs")
++            print("mode:" + mode + " is not defined for apply_PA_knobs")
+ 
+     def get_hardware_graph(self):
+         return self.hardware_graph
+ 
+-    def get_task_by_name(self, task_name):
++    def get_task_by_name(self, task_name) -> Task:
+         return [task_ for task_ in self.get_tasks() if task_.name == task_name][0]
+ 
+ 
+@@ -507,7 +516,7 @@
+ # not that you can query this container with the same functions as the
+ # SimDesignPoint (i.e, same modules are provide). However, this is not t
+ class SimDesignPointContainer:
+-    def __init__(self, design_point_list, database, reduction_mode = "avg"):
++    def __init__(self, design_point_list, database:DataBase, reduction_mode = "avg"):
+         self.design_point_list = design_point_list
+         self.reduction_mode = reduction_mode  # how to reduce the results.
+         self.database = database  # hw/sw database
+@@ -529,8 +538,8 @@
+         return self.dummy_tasks
+ 
+     # bootstrap the design from scratch
+-    def reset_design(self, workload_to_hardware_map=[], workload_to_hardware_schedule=[]):
+-        self.dp_rep.reset_design()
++    def reset_design(self, database:DataBase, workload_to_hardware_map=[], workload_to_hardware_schedule=[]):
++        self.dp_rep.reset_design(database)
+ 
+     def set_move_applied(self, move_applied):
+         self.move_applied = move_applied
+@@ -578,20 +587,13 @@
+     def get_workload_to_hardware_schedule(self):
+         return self.dp_rp.get_workload_to_hardware_schedule()
+ 
+-    def get_kernels(self):
+-        return self.dp_rp.get_kernels()
+-
+     def get_kernel_by_task_name(self, task: Task):
+         return self.dp_rep.get_kernel_by_task_name(task)
+ 
+     # get the kernels of the design
+-    def get_kernels(self):
++    def get_kernels(self) -> List[Kernel]:
+         return self.dp_rep.get_kernels()
+ 
+-    # get the sw to hw mapping
+-    def get_workload_to_hardware_map(self):
+-        return self.dp_rep.get_workload_to_hardware_map()
+-
+     # get the SOCs that the design resides in
+     def get_designs_SOCs(self):
+         return self.dp_rep.get_designs_SOCs()
+@@ -627,6 +629,7 @@
+         self.__kernels = self.sim_dp_container.design_point_list[0].get_kernels()
+         self.SOC_area_dict = defaultdict(lambda: defaultdict(dict))  # area of all blocks within each SOC
+         self.SOC_area_subtype_dict = defaultdict(lambda: defaultdict(dict))  # area of all blocks within each SOC
++        self.SOC_area_in_bytes_subtype_dict = defaultdict(lambda: defaultdict(dict))  # area of all blocks within each SOC
+         self.system_complex_area_dict = defaultdict()
+         self.SOC_metric_dict = defaultdict(lambda: defaultdict(dict))
+         self.system_complex_metric_dict = defaultdict(lambda: defaultdict(dict))
+@@ -701,7 +704,6 @@
+         ips = [el for el in self.dp_rep.get_blocks() if el.subtype == "ip"]
+         gpps = [el for el in self.dp_rep.get_blocks() if el.subtype == "gpp"]
+ 
+-
+         # get frequency data
+         ips_freqs = [mem.get_block_freq() for mem  in ips]
+         gpp_freqs = [mem.get_block_freq() for mem  in gpps]
+@@ -759,7 +761,9 @@
+             ips_area_coeff_var = 0
+         else:
+             ips_area_std = st.stdev(ips_area)
+-            ips_area_coeff_var = st.stdev(ips_area) / st.mean(ips_area)
++            ips_area_mean = st.mean(ips_area)
++            assert ips_area_mean != 0.
++            ips_area_coeff_var = ips_area_std / ips_area_mean
+ 
+         if len(gpp_area) == 0:
+             gpps_total_area = 0
+@@ -882,12 +886,18 @@
+         for workload in self.database.get_workloads_last_task().keys():
+             # single out workload in the current best
+             cur_best_ex_singled_out_workload,database = dse.single_out_workload(dse.so_far_best_ex_dp, self.database, workload, self.database.db_input.workload_tasks[workload])
+-            cur_best_sim_dp_singled_out_workload = dse.eval_design(cur_best_ex_singled_out_workload, database)
++            if config.DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++                cur_best_ex_singled_out_workload, cur_best_sim_dp_singled_out_workload = dse.eval_design(cur_best_ex_singled_out_workload, database)
++            else:
++                cur_best_sim_dp_singled_out_workload = dse.eval_design(cur_best_ex_singled_out_workload, database)
+ 
+             # lower the cur best with single out
+             most_infer_ex_dp = dse.transform_to_most_inferior_design(dse.so_far_best_ex_dp)
+             most_infer_ex_dp_singled_out_workload, database = dse.single_out_workload(most_infer_ex_dp, self.database, workload, self.database.db_input.workload_tasks[workload])
+-            most_infer_sim_dp_singled_out_workload = dse.eval_design(most_infer_ex_dp_singled_out_workload,database)
++            if config.DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++                most_infer_ex_dp_singled_out_workload, most_infer_sim_dp_singled_out_workload = dse.eval_design(most_infer_ex_dp_singled_out_workload,database)
++            else:
++                most_infer_sim_dp_singled_out_workload = dse.eval_design(most_infer_ex_dp_singled_out_workload,database)
+ 
+             # speed ups
+             customization_first_speed_up = most_infer_sim_dp_singled_out_workload.dp.get_serial_design_time()/cur_best_sim_dp_singled_out_workload.dp.get_serial_design_time()
+@@ -913,10 +923,16 @@
+ 
+         # for the entire design
+         most_infer_ex_dp = dse.transform_to_most_inferior_design(dse.so_far_best_ex_dp)
+-        most_infer_sim_dp = dse.eval_design(most_infer_ex_dp, self.database)
++        if config.DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++            most_infer_ex_dp, most_infer_sim_dp = dse.eval_design(most_infer_ex_dp, self.database)
++        else:
++            most_infer_sim_dp = dse.eval_design(most_infer_ex_dp, self.database)
+ 
+         most_infer_ex_before_unrolling_dp = dse.transform_to_most_inferior_design_before_loop_unrolling(dse.so_far_best_ex_dp)
+-        most_infer_sim_before_unrolling_dp = dse.eval_design(most_infer_ex_before_unrolling_dp, self.database)
++        if config.DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++            most_infer_ex_before_unrolling_dp, most_infer_sim_before_unrolling_dp = dse.eval_design(most_infer_ex_before_unrolling_dp, self.database)
++        else:
++            most_infer_sim_before_unrolling_dp = dse.eval_design(most_infer_ex_before_unrolling_dp, self.database)
+ 
+         #customization_first_speed_up_full_system = most_infer_sim_dp.dp.get_serial_design_time()/dse.so_far_best_sim_dp.dp.get_serial_design_time()
+         #parallelism_second_speed_up_full_system = dse.so_far_best_sim_dp.dp.get_par_speedup()
+@@ -1253,7 +1269,7 @@
+             pe = [blk for blk in krnl.get_blocks() if blk.type == "pe"][0]
+             mems = [blk for blk in krnl.get_blocks() if blk.type == "mem"]
+             for mem in mems:
+-                path_length = len(self.dp_rep.get_hardware_graph().get_path_between_two_vertecies(pe, mem))
++                path_length = len(self.dp_rep.get_hardware_graph().get_path_between_two_vertices(pe, mem))
+                 locality_in_bytes += krnl.calc_traffic_per_block(mem)/(path_length-2)
+ 
+         """
+@@ -1261,8 +1277,8 @@
+         for mem in local_memories:
+             bal_traffic = 0
+             block_s_krnels = self.get_krnels_of_block(mem)
+-            for krnl in blocks_krnels: 
+-                
++            for krnl in blocks_krnels:
++
+                 krnl.block_phase_read_dict[mem][self.phase_num] += read_work
+         """
+ 
+@@ -1562,16 +1578,20 @@
+         kernel_metric_values = defaultdict(lambda: defaultdict(list))
+         for dp in self.sim_dp_container.design_point_list:
+             for kernel_ in dp.get_kernels():
++                if kernel_.dropped:
++                    continue
+                 for metric in config.all_metrics:
+                     kernel_metric_values[kernel_.get_task_name()][metric].append\
+                         (kernel_.stats.get_metric(metric))
+ 
+-        for kernel in self.__kernels:
++        for kernel in self.get_kernels():
++            if kernel.dropped:
++                continue
+             for metric in config.all_metrics:
+                 kernel.stats.set_stats_directly(metric,
+                     self.reduce(kernel_metric_values[kernel.get_task_name()][metric]))
+ 
+-    def get_kernels(self):
++    def get_kernels(self) -> List[Kernel]:
+         return self.__kernels
+ 
+     # Functionality: level 2 questions for across/inter design questions
+@@ -1619,7 +1639,7 @@
+         #       block bottlenecks, but here we just use the
+         #       the block bottleneck of the representative design
+         #       since self.__kernels are set to this designs kernels
+-        kernel_blck_sorted : Block = krnl.stats.get_block_sorted(metric)
++        kernel_blck_sorted : Block = krnl.stats.get_block_bottleneck_sorted(metric)
+         return kernel_blck_sorted
+ 
+     # -------------------------------------------
+@@ -1731,6 +1751,12 @@
+             area_list.append(dp.dp_stats.get_SOC_area_base_on_subtype(subtype_, SOC_type, SOC_id))
+         return self.reduce(area_list)
+ 
++    def calc_SOC_area_in_bytes_base_on_subtype(self, subtype_, SOC_type, SOC_id):
++        area_list = []
++        for dp in self.sim_dp_container.design_point_list:
++            area_list.append(dp.dp_stats.get_SOC_area_in_bytes_base_on_subtype(subtype_, SOC_type, SOC_id))
++        return self.reduce(area_list)
++
+ 
+     def set_SOC_metric_value(self,metric_type, SOC_type, SOC_id):
+         assert(metric_type in config.all_metrics), metric_type + " is not supported"
+@@ -1739,6 +1765,8 @@
+                 self.SOC_area_dict[block_type][SOC_type][SOC_id] = self.calc_SOC_area_base_on_type(block_type, SOC_type, SOC_id)
+             for block_subtype in ["dram", "sram", "ic", "ip", "gpp"]:
+                 self.SOC_area_subtype_dict[block_subtype][SOC_type][SOC_id] = self.calc_SOC_area_base_on_subtype(block_subtype, SOC_type, SOC_id)
++            for block_subtype in ["sram", "dram"]:
++                self.SOC_area_in_bytes_subtype_dict[block_subtype][SOC_type][SOC_id] = self.calc_SOC_area_in_bytes_base_on_subtype(block_subtype, SOC_type, SOC_id)
+         self.SOC_metric_dict[metric_type][SOC_type][SOC_id] =  self.calc_SOC_metric_value(metric_type, SOC_type, SOC_id)
+ 
+ 
+@@ -1752,15 +1780,34 @@
+                     self.system_complex_area_dict[block_type] = sum([self.get_SOC_area_base_on_type(block_type, type_, id_)
+                                                              for type_, id_ in type_id_list])
+ 
++            # This is already being encapsulated in non_dram category below
++            # self.system_complex_area_dram_non_dram["pe"] = 0
++            # for block_subtype in ["gpp", "ip"]:
++            #     for type_, id_ in type_id_list:
++            #         self.system_complex_area_dram_non_dram["pe"] += sum([self.get_SOC_area_base_on_subtype(block_subtype, type_, id_)
++            #                                                  for type_, id_ in type_id_list])
++            for block_subtype in ["sram", "ic", "gpp", "ip"]:
++                self.system_complex_area_dram_non_dram[block_subtype] = 0
++            
++            self.system_complex_area_dram_non_dram["sram_bytes"] = 0
++            self.system_complex_area_dram_non_dram["dram_bytes"] = 0
++
+             self.system_complex_area_dram_non_dram["non_dram"] = 0
+             for block_subtype in ["sram", "ic", "gpp", "ip"]:
+                 for type_, id_ in type_id_list:
+                     self.system_complex_area_dram_non_dram["non_dram"] += sum([self.get_SOC_area_base_on_subtype(block_subtype, type_, id_)
+                                                              for type_, id_ in type_id_list])
++                    self.system_complex_area_dram_non_dram[block_subtype] += sum([self.get_SOC_area_base_on_subtype(block_subtype, type_, id_)
++                                                             for type_, id_ in type_id_list])
++                    if block_subtype == "sram":
++                        self.system_complex_area_dram_non_dram["sram_bytes"] += sum([self.get_SOC_area_in_bytes_base_on_subtype(block_subtype, type_, id_)
++                                                             for type_, id_ in type_id_list])
+             for block_subtype in ["dram"]:
+                 for type_, id_ in type_id_list:
+                     self.system_complex_area_dram_non_dram["dram"] = sum([self.get_SOC_area_base_on_subtype(block_subtype, type_, id_)
+                                                              for type_, id_ in type_id_list])
++                    self.system_complex_area_dram_non_dram["dram_bytes"] = sum([self.get_SOC_area_in_bytes_base_on_subtype(block_subtype, type_, id_)
++                                                             for type_, id_ in type_id_list])
+ 
+         if metric_type in ["area", "energy", "cost"]:
+             self.system_complex_metric_dict[metric_type] = sum([self.get_SOC_metric_value(metric_type, type_, id_)
+@@ -1771,6 +1818,7 @@
+         elif metric_type in ["power"]:
+             self.system_complex_metric_dict[metric_type] = max([self.get_SOC_metric_value(metric_type, type_, id_)
+                                                                  for type_, id_ in type_id_list])
++            # print("@@ power ", self.system_complex_metric_dict[metric_type])
+         else:
+             raise Exception("metric_type:" + metric_type + " is not supported")
+ 
+@@ -1785,7 +1833,9 @@
+ 
+     # return the metric of interest for the SOC. metric_type is the metric you are interested in
+     def get_SOC_metric_value(self, metric_type, SOC_type, SOC_id):
+-        return self.SOC_metric_dict[metric_type][SOC_type][SOC_id]
++        rc = self.SOC_metric_dict[metric_type][SOC_type][SOC_id]
++        # print(f"@@ metric {metric_type} SOC_type {SOC_type} SOC_id {SOC_id} value {rc}")
++        return rc
+ 
+     def get_SOC_area_base_on_type(self, block_type, SOC_type, SOC_id):
+         assert(block_type in ["pe", "ic", "mem"]), "block_type" + block_type + " is not supported"
+@@ -1797,14 +1847,42 @@
+             return 0
+         return self.SOC_area_subtype_dict[block_subtype][SOC_type][SOC_id]
+ 
++    def get_SOC_area_in_bytes_base_on_subtype(self, block_subtype, SOC_type, SOC_id):
++        assert(block_subtype in ["dram", "sram"]), "block_subtype" + block_subtype + " is not supported"
++        if block_subtype not in self.SOC_area_in_bytes_subtype_dict.keys():  # this element does not exist
++            return 0
++        return self.SOC_area_in_bytes_subtype_dict[block_subtype][SOC_type][SOC_id]
++
+     # return the metric of interest for the system complex. metric_type is the metric you are interested in.
+     # Note that system complex can contain multiple SOCs.
+     def get_system_complex_metric(self, metric_type):
+-        return self.system_complex_metric_dict[metric_type]
++        rc = self.system_complex_metric_dict[metric_type]
++        # print(f"@@ get_system_complex_metric {metric_type} {rc}")
++        return rc
+ 
+     def get_system_complex_area_stacked_dram(self):
+         return self.system_complex_area_dram_non_dram
+ 
++    def get_design_composition_str(self):
++        design_comp = {}
++        for blk in self.dp_rep.get_hardware_graph().get_blocks():
++            if blk.instance_type not in design_comp:
++                design_comp[blk.instance_type] = 0
++            design_comp[blk.instance_type] += 1
++
++        string = ""
++        for blk_name_without_type, blk_count in sorted(design_comp.items(), key=lambda x: x[0]):
++            if string != "":
++                string += "__"
++            string += f"{blk_name_without_type}:{blk_count}"
++        return string
++
++    def print_summary(self, prefix:str=""):
++        print(prefix + "design's latency: " + str(self.get_system_complex_metric("latency")), flush=True)
++        print(prefix + "design's power: " + str(self.get_system_complex_metric("power")), flush=True)
++        print(prefix + "design's area: " + str(self.get_system_complex_metric("area")), flush=True)
++        print(prefix + "design's sub area: " + str(self.get_system_complex_area_stacked_dram()), flush=True)
++        print(prefix + "design's composition: " + self.get_design_composition_str(), flush=True)
+ 
+     # get system_complex area. type_ is selected from ("pe", "mem", "ic")
+     def get_system_complex_area_base_on_type(self, type_):
+@@ -1930,6 +2008,13 @@
+             for workload, val in  metric_val.items():
+                 dict_ = self.database.get_ideal_metric_value(metric_name, type)
+                 value_list.append((val - dict_[workload])/(dampening_coeff*dict_[workload]))
++                if config.LAT_AMP_FACTOR is not None and value_list[-1] > 0.:
++                    value_list[-1] *= config.LAT_AMP_FACTOR
++            # if config.ASSIGN_PENALTY_FOR_VARYING_WRKLD_LATS:
++            #     variance = np.var(np.array(value_list))
++            #     if variance > 0:
++            #         value_list = [v+100*variance for v in value_list]
++            #         print(f"normalized_distance_for_stacked_dram, type {type}, id {id}, metric_name, {metric_name}, dampening_coeff {dampening_coeff}, variance {variance}, value_list {value_list}")
+             return value_list
+         elif metric_name == "area":
+             # get area aggregation of all the SOC minus dram and normalize it
+@@ -1945,9 +2030,6 @@
+         else:
+             return [(metric_val - self.database.get_ideal_metric_value(metric_name, type))/ (dampening_coeff*self.database.get_ideal_metric_value(metric_name, type))]
+ 
+-
+-
+-
+     # normalized to the budget
+     def dist_to_goal_per_metric(self, metric_name, mode):
+         dist_list = []
+@@ -1978,7 +2060,7 @@
+ 
+     # check if dp_rep is meeting the budget
+     # modes: {"simple", "eliminate", "dampen"}.
+-    #        Simple: just calculates the city distance
++    #        simple: just calculates the city distance
+     #        eliminates: eliminate the metric that has already met the budget
+     #        dampen: dampens the impact of the metric that has already met the budget
+     def dist_to_goal(self,  metrics_to_look_into=["all"], mode="simple"):  # mode simple, just calculate
+@@ -1987,7 +2069,9 @@
+ 
+         dist_list = []
+         for metric_name in metrics_to_look_into:
+-            dist_list.append(self.dist_to_goal_per_metric(metric_name, mode))
++            dist_to_goal_ = self.dist_to_goal_per_metric(metric_name, mode)
++            dist_list.append(dist_to_goal_)
++            # print(f"@@ metric_name {metric_name}, dist_to_goal {dist_to_goal_}, mode {mode}")
+ 
+         city_dist = sum(dist_list)   # we use city distance to allow for probability prioritizing
+         return city_dist
+@@ -2010,15 +2094,24 @@
+ # This module emulates the simulated design point.
+ # It contains the information for the simulation of a design point
+ class SimDesignPoint(ExDesignPoint):
+-    def __init__(self, hardware_graph, workload_to_hardware_map=[], workload_to_hardware_schedule=[]):
++    def __init__(self, hardware_graph, database:DataBase, workload_to_hardware_map=[], workload_to_hardware_schedule=[]):
+         # primitive variables
+         self.__workload_to_hardware_map:WorkloadToHardwareMap = None
+         self.__workload_to_hardware_schedule:WorkloadToPEBlockSchedule = None
+         self.hardware_graph = hardware_graph  # contains all the hardware blocks + their topology (how they are connected)
+ 
+         self.__hardware, self.__workload, self.__kernels = [[]]*3
++
++        # track for the current phase, how many readers/writers are reading/writing from each mem
++        if config.CUST_SCHED_CONSIDER_DM_TIME:
++            self.mem_subscribers:Dict[Block,Dict[Tuple[str,str],float]] = {}
++            for mem in self.get_hardware_graph().get_blocks_by_type("mem"):
++                self.mem_subscribers[mem] = {}
++        else:
++            self.mem_subscribers = None
++
+         # bootstrap the design and it's stats
+-        self.reset_design(workload_to_hardware_map, workload_to_hardware_schedule)
++        self.reset_design(database, workload_to_hardware_map, workload_to_hardware_schedule)
+ 
+         self.SOC_phase_energy_dict = defaultdict(dict)  # energy associated with each phase
+         self.phase_latency_dict = {}   # duration (time) for each phase.
+@@ -2036,6 +2129,8 @@
+         self.depth_number = 0  # the depth (within on iteration) which the simulation is done
+         self.simulation_time = 0  # how long did it take to do the simulation
+         self.serial_design_time = 0
++        self.simulation_time_analytical_portion = 0
++        self.simulation_time_phase_driven_portion = 0
+         self.par_speedup_time = 0
+         if config.use_cacti:
+             self.cacti_hndlr = cact_handlr.CactiHndlr(config.cact_bin_addr, config.cacti_param_addr,
+@@ -2046,8 +2141,6 @@
+             self.block_phase_work_dict[block] = {}
+             self.block_phase_utilization_dict[block] = {}
+ 
+-
+-
+     def set_serial_design_time(self, serial_design_time):
+         self.serial_design_time = serial_design_time
+ 
+@@ -2217,75 +2310,86 @@
+         #subtype = "sram"  # TODO: change later to sram/dram
+         mem_subtype = self.FARSI_to_cacti_mem_type_converter(subtype)
+         cell_type = self.FARSI_to_cacti_cell_type_converter(subtype)
++        # print(f"DEBUG: subtype: {subtype}, mem_subtype: {mem_subtype}, mem_bytes: {mem_bytes}, cell_type: {cell_type}")
+         self.cacti_hndlr.set_cur_mem_type(mem_subtype)
+         self.cacti_hndlr.set_cur_mem_size(mem_bytes)
+         self.cacti_hndlr.set_cur_cell_type(cell_type)
+ 
+         # run cacti
++        cacti_failed = True
+         try:
+             cacti_area_energy_results = self.cacti_hndlr.collect_cati_data()
++            cacti_failed = False
+         except Exception as e:
+-            print("Using cacti, the following memory config tried and failed")
++            print(f"Using cacti, the following memory config tried and failed with {e}")
+             print(self.cacti_hndlr.get_config())
++            # cacti_area_energy_results = {
++            #     'Dynamic read energy (nJ)': 0.,
++            #     'Dynamic write energy (nJ)': 0.,
++            #     'Area (mm2)': 0.,
++            # }
+             raise e
+ 
+         read_energy_per_byte = float(cacti_area_energy_results['Dynamic read energy (nJ)']) * (10 ** -9) / 16
+         write_energy_per_byte = float(cacti_area_energy_results['Dynamic write energy (nJ)']) * (10 ** -9) / 16
+         area = float(cacti_area_energy_results['Area (mm2)']) * (10 ** -6)
++        leakage_power_per_byte = (float(cacti_area_energy_results["Standby leakage per bank(mW)"]) * float(cacti_area_energy_results["Number of banks"]) / float(cacti_area_energy_results["Capacity (bytes)"])) * (10 ** -3)
+ 
+-        read_energy_per_byte *= tech_node["energy"]["non_gpp"]
+-        write_energy_per_byte *= tech_node["energy"]["non_gpp"]
++        read_energy_per_byte *= tech_node["energy"]["mem"]
++        write_energy_per_byte *= tech_node["energy"]["mem"]
+         area *= tech_node["area"]["mem"]
++        leakage_power_per_byte *= tech_node["energy"]["mem"]
+ 
+         # log values
+         self.cacti_hndlr.cacti_data_container.insert(list(zip(config.cacti_input_col_order +
+                                                               config.cacti_output_col_order,
+-                                                              [mem_subtype, mem_bytes, read_energy_per_byte, write_energy_per_byte, area])))
++                                                              [mem_subtype, mem_bytes, read_energy_per_byte, write_energy_per_byte, area, leakage_power_per_byte])))
+ 
+-        return read_energy_per_byte, write_energy_per_byte, area
++        return read_energy_per_byte, write_energy_per_byte, area, leakage_power_per_byte
+ 
+     # either run or look into the cached data (from CACTI) to get energy/area data
+     def collect_cacti_data(self, blk, database):
+-
++        #TODO: IC power not considered
+         if blk.type == "ic" :
+-            return 0,0,0,1
++            return 0,0,0,1,0
+         elif blk.type == "mem":
+             mem_bytes = max(blk.get_area_in_bytes(), config.cacti_min_memory_size_in_bytes) # to make sure we don't go smaller than cacti's minimum size
+             mem_subtype = self.FARSI_to_cacti_mem_type_converter(blk.subtype)
+             mem_bytes = (math.ceil(mem_bytes / config.min_mem_size[blk.subtype])) * config.min_mem_size[blk.subtype]  # modulo calculation
+             #mem_subtype = "ram" #choose from ["main memory", "ram"]
+-            found_results, read_energy_per_byte, write_energy_per_byte, area = \
++            found_results, read_energy_per_byte, write_energy_per_byte, area, leakage_power_per_byte = \
+                 self.cacti_hndlr.cacti_data_container.find(list(zip(config.cacti_input_col_order,[mem_subtype, mem_bytes])))
+             if not found_results:
+-                read_energy_per_byte, write_energy_per_byte, area = self.run_and_collect_cacti_data(blk, database)
++                read_energy_per_byte, write_energy_per_byte, area, leakage_power_per_byte = self.run_and_collect_cacti_data(blk, database)
+                 #read_energy_per_byte *= tech_node["energy"]
+                 #write_energy_per_byte *= tech_node["energy"]
+                 #area *= tech_node["area"]
+             area_per_byte = area/mem_bytes
+-            return read_energy_per_byte, write_energy_per_byte, area, area_per_byte
++            return read_energy_per_byte, write_energy_per_byte, area, area_per_byte, leakage_power_per_byte
+ 
+     # For each kernel, update the energy and power using cacti
+     def cacti_update_energy_area_of_kernel(self, krnl, database):
+         # iterate through block/phases, collect data and insert them up
+         blk_area_dict = {}
+         for blk, phase_metric in krnl.block_phase_energy_dict.items():
++            # print(f"blk: {blk.instance_name} ({blk.type}), phase_metric: {phase_metric}")
+             # only for memory and ic
+             if blk.type not in ["mem", "ic"]:
+                 blk_area_dict[blk] = krnl.stats.get_block_area()[blk]
+                 continue
+-            read_energy_per_byte, write_energy_per_byte, area, area_per_byte = self.collect_cacti_data(blk, database)
++            read_energy_per_byte, write_energy_per_byte, area, area_per_byte, leakage_power_per_byte = self.collect_cacti_data(blk, database)
+             for phase, metric in phase_metric.items():
+-                krnl.block_phase_energy_dict[blk][phase] = krnl.block_phase_read_dict[blk][
+-                                                               phase] * read_energy_per_byte
+-                krnl.block_phase_energy_dict[blk][phase] += krnl.block_phase_write_dict[blk][
+-                                                               phase] * write_energy_per_byte
++                # assert phase in krnl.block_phase_read_dict[blk].keys(), "phase: " + str(phase) + ', ' + blk.instance_name + ', ' + krnl.task_name
++                # assert phase in krnl.block_phase_write_dict[blk].keys(), "phase: " + str(phase) + ', ' + blk.instance_name + ', ' + krnl.task_name
++                krnl.block_phase_energy_dict[blk][phase] = krnl.block_phase_read_dict[blk][phase] * read_energy_per_byte
++                krnl.block_phase_energy_dict[blk][phase] += krnl.block_phase_write_dict[blk][phase] * write_energy_per_byte
+                 krnl.block_phase_area_dict[blk][phase] = area
+ 
+             blk_area_dict[blk] = area
+-
+         # apply aggregates, which is iterate through every phase, scratch their values, and aggregates all the block energies
+         # areas.
+         krnl.stats.phase_energy_dict = krnl.aggregate_energy_of_for_every_phase()
++        # print(f"{krnl.task_name}.krnl.stats.phase_energy_dict = {krnl.stats.phase_energy_dict}")
+         krnl.stats.phase_area_dict = krnl.aggregate_area_of_for_every_phase()
+ 
+         """
+@@ -2302,11 +2406,15 @@
+ 
+     # For each block, get energy area
+     # at the moment, only setting up area. TODO: check whether energy matters
+-    def cacti_update_area_of_block(self, block, database):
++    def cacti_update_area_leakage_power_of_block(self, block, database):
+         if block.type not in ["mem", "ic"]:
+             return
+-        read_energy_per_byte, write_energy_per_byte, area, area_per_byte = self.collect_cacti_data(block, database)
++        read_energy_per_byte, write_energy_per_byte, area, area_per_byte, leakage_power_per_byte = self.collect_cacti_data(block, database)
+         block.set_area_directly(area)
++        if MEM_LEAKAGE_POWER:
++            block.set_leakage_power_directly(leakage_power_per_byte * block.get_area_in_bytes())
++        else:
++            block.set_leakage_power_directly(0)
+         #block.update_area_energy_power_rate(energy_per_byte, area_per_byte)
+ 
+     # update the design energy (after you have already updated the kernels energy)
+@@ -2324,10 +2432,12 @@
+                 for kernel in self.get_kernels():
+                     if kernel.SOC_type == SOC_type and kernel.SOC_id == SOC_id:
+                         if phase in kernel.stats.phase_energy_dict.keys():
++                            # print(f"?? kernel {kernel.task_name}, phase {phase}, adding {kernel.stats.phase_energy_dict[phase]}")
+                             self.SOC_phase_energy_dict[(SOC_type, SOC_id)][phase] += kernel.stats.phase_energy_dict[phase]
+ 
++                    # print(f"?? kernel {kernel.task_name}, phase {phase}, {self.SOC_phase_energy_dict[(SOC_type, SOC_id)][phase]}")
+     def correct_power_area_with_cacti(self, database):
+-        # bellow dictionaries used for debugging purposes. You can delete them later
++        # below dictionaries used for debugging purposes. You can delete them later
+         krnl_ratio_phase = {}  # for debugging delete later
+ 
+         # update in 3 stages
+@@ -2335,9 +2445,9 @@
+         for krnl in self.__kernels:
+             krnl_ratio_phase[krnl] = self.cacti_update_energy_area_of_kernel(krnl, database)
+ 
+-        # (2) fix the block's area
++        # (2) fix the block's area, leakage_power
+         for block in self.get_blocks():
+-            self.cacti_update_area_of_block(block, database)
++            self.cacti_update_area_leakage_power_of_block(block, database)
+ 
+         # (3) update/fix the entire design accordingly
+         self.cacti_update_energy_area_of_design()
+@@ -2346,11 +2456,12 @@
+         return self.hardware_graph
+ 
+     # collect (profile) design points stats.
+-    def collect_dp_stats(self, database):
+-        self.dp_stats = DPStats(self, database)
++    def collect_dp_stats(self, database, bottleneck_stats_dict):
++        self.dp_stats = DPStats(self, database, bottleneck_stats_dict)
+ 
+     def get_designs_SOCs(self):
+-        blocks = self.get_workload_to_hardware_map().get_blocks()
++        # blocks = self.get_workload_to_hardware_map().get_blocks()
++        blocks = self.hardware_graph.get_blocks()
+         designs_SOCs = []
+         for block in blocks:
+             if (block.SOC_type, block.SOC_id) not in designs_SOCs:
+@@ -2359,7 +2470,8 @@
+ 
+     # This is used for idle power calculations
+     def get_blocks(self):
+-        blocks = self.get_workload_to_hardware_map().get_blocks()
++        # blocks = self.get_workload_to_hardware_map().get_blocks()
++        blocks = self.hardware_graph.get_blocks()
+         return blocks
+ 
+     # It is a wrapper around reset_design that includes all the necessary work to clear the stats
+@@ -2372,18 +2484,17 @@
+         self.dp_stats = None
+ 
+     # bootstrap the design from scratch
+-    def reset_design(self, workload_to_hardware_map=[], workload_to_hardware_schedule=[]):
+-        def update_kernels(self_):
++    def reset_design(self, database, workload_to_hardware_map=[], workload_to_hardware_schedule=[]):
++        def update_kernels(self_, database):
+             self_.__kernels = []
+             for task_to_blocks_map in self.__workload_to_hardware_map.tasks_to_blocks_map_list:
+                 task = task_to_blocks_map.task
+-                self_.__kernels.append(Kernel(self_.__workload_to_hardware_map.get_by_task(task)))#,
+-#                                              self_.__workload_to_hardware_schedule.get_by_task(task)))
++                self_.__kernels.append(Kernel(self_.__workload_to_hardware_map.get_by_task(task), self_.hardware_graph.get_blocks(), database.task_to_mappable_pe_map, self_.mem_subscribers))
+         if workload_to_hardware_map:
+             self.__workload_to_hardware_map = workload_to_hardware_map
+         if workload_to_hardware_schedule:
+             self.__workload_to_hardware_schedule = workload_to_hardware_schedule
+-        update_kernels(self)
++        update_kernels(self, database)
+ 
+     def get_workload_to_hardware_map(self):
+         return self.__workload_to_hardware_map
+@@ -2391,28 +2502,23 @@
+     def get_workload_to_hardware_schedule(self):
+         return self.__workload_to_hardware_schedule
+ 
+-    def get_kernels(self):
++    def get_kernels(self) -> List[Kernel]:
+         return self.__kernels
+ 
+     def get_kernel_by_task_name(self, task:Task):
+         return list(filter(lambda kernel: task.name == kernel.task_name, self.get_kernels()))[0]
+ 
+-    def get_kernels(self):
+-        return self.__kernels
+-
+-    def get_workload_to_hardware_map(self):
+-        return self.__workload_to_hardware_map
+-
+ 
+ # design point statistics (stats). This class contains the profiling information for a simulated design.
+ # Note that the difference between system complex and SOC is that a system complex can contain multiple SOCs.
+ class DPStats:
+-    def __init__(self, sim_dp: SimDesignPoint, database):
++    def __init__(self, sim_dp: SimDesignPoint, database, bottleneck_stats_dict=None):
+         self.comparison_mode = "latency"  # metric to compare designs against one another
+         self.dp = sim_dp  # simulated design point object
+         self.__kernels = self.dp.get_kernels()  # design kernels
+         self.SOC_area_dict = defaultdict(lambda: defaultdict(dict))  # area of pes
+         self.SOC_area_subtype_dict = defaultdict(lambda: defaultdict(dict))  # area of pes
++        self.SOC_area_in_bytes_subtype_dict = defaultdict(lambda: defaultdict(dict))  # area of pes
+         self.system_complex_area_dict = defaultdict()  # system complex area values (for memory, PEs, buses)
+         self.power_duration_list = defaultdict(lambda: defaultdict(dict))  # power and duration of the power list
+         self.SOC_metric_dict = defaultdict(lambda: defaultdict(dict))  # dictionary containing various metrics for the SOC
+@@ -2429,16 +2535,77 @@
+         use_slack_management_estimation = config.use_slack_management_estimation
+         # collect the data
+         self.collect_stats(use_slack_management_estimation)
++        self.bottleneck_stats = bottleneck_stats_dict
++        self.dump_stats('./')
++
++    def collect_stats_by_task(self, work_rate_analysis_fname, thpt_bw_analysis_fname):
++        assert self.bottleneck_stats
++        # pprint(self.bottleneck_stats)
++        assert not self.bottleneck_stats[len(self.bottleneck_stats)-2]
++        del self.bottleneck_stats[len(self.bottleneck_stats)-2]
++        assert not self.bottleneck_stats[len(self.bottleneck_stats)-2]
++        del self.bottleneck_stats[len(self.bottleneck_stats)-2]
++        # pprint(self.bottleneck_stats)
++        df_wr = pd.DataFrame(columns=['Task/Phase']+list(range(-1, len(self.bottleneck_stats)-1))+["Total (s)"])
++        df_wr.set_index('Task/Phase', inplace=True)
++        df_thpt_bw = pd.DataFrame(columns=['Task/Phase']+list(range(-1, len(self.bottleneck_stats)-1))+["Total (s)"])
++        df_thpt_bw.set_index('Task/Phase', inplace=True)
++        phase_lat_list = [self.dp.phase_latency_dict[phase_num+1] for phase_num in range(-1, len(self.bottleneck_stats)-1)]
++        cum_phase_lat_list = list(accumulate(phase_lat_list))
++        # Append total latency at the end.
++        phase_lat_list.append(sum(phase_lat_list))
++        cum_phase_lat_list.append("")
++        for phase_num, d1 in self.bottleneck_stats.items():
++            phase_num_lat = f"P{phase_num} ({self.dp.phase_latency_dict[phase_num]})"
++            # print(f"[STATS] \tPhase {phase_num_lat}")
++            for task_name, d2 in d1.items():
++                # print(f"[STATS] \t\tKernel task = {task_name}")
++                # for block_instance_name, d3 in d2['blocks'].items():
++                    # print(f"[STATS] \t\t\tBlock inst name = {block_instance_name}")
++                    # for dir_, work_rate in d3.items():
++                        # print(f"[STATS] \t\t\t\tDir {dir_}, work_rate = {work_rate:,}")
++                # print(f"[STATS] bottleneck = {d2['bottleneck'].instance_name}")
++                # print(f"[STATS] bottleneck_work_rate = {d2['bottleneck_work_rate']:,}")
++                # print(f"[STATS] pe_work_rate = {d2['pe_work_rate']:,}")
++
++                # Measure compute/memory-boundedness.
++                thpt_over_bw = d2['comp_work_rate']/d2['mem_bandwidth'] # comp_work_rate == alloc_throughput for PEs
++                wr_ratio = d2['mem_work_rate']/d2['comp_work_rate']
++                if wr_ratio > 1.:
++                    wr_label = "CB"
++                else:
++                    wr_label = "MB"
++                # print(f"[STATS] bottleneck_to_pe_work_rate_ratio = {wr_ratio:,}")
++                # df_wr.loc[task_name, phase_num] = f"{wr_ratio} ({wr_label})"
++                scale_f = self.dp.phase_latency_dict[phase_num+1]/phase_lat_list[-1]
++                df_wr.loc[task_name, phase_num] = f"{log(wr_ratio, 2) * scale_f}"
++                # print(f"[STATS] phase {phase_num}, task {task_name}, wr {wr_ratio}, log_2_wr {log(wr_ratio, 2)}, lat {self.dp.phase_latency_dict[phase_num+1]}, tot_lat {phase_lat_list[-1]}")
++                df_thpt_bw.loc[task_name, phase_num] = f"{thpt_over_bw}"
++                # df = df.append({'Task/Phase': task_name, phase_num: wr_ratio}, ignore_index=True)
++
++        # print(df_wr.to_string())
++        # print(df_thpt_bw.to_string())
++        # print(len(phase_lat_list)-1, phase_lat_list)
++        # print(cum_phase_lat_list)
++        df_wr.loc["Phase Latency"] = phase_lat_list
++        df_wr.loc["Cum. Phase Latency"] = cum_phase_lat_list
++        df_wr.fillna('', inplace=True)
++        df_wr.to_csv(work_rate_analysis_fname) # , mode='a')
++        df_thpt_bw.loc["Phase Latency"] = phase_lat_list
++        df_wr.loc["Cum. Phase Latency"] = cum_phase_lat_list
++        df_thpt_bw.fillna('', inplace=True)
++        df_thpt_bw.to_csv(thpt_bw_analysis_fname)
++        # print(f"@@ [STATS] Wrote results to paths {work_rate_analysis_fname} and {thpt_bw_analysis_fname}")
+ 
+     # write the results into a file
+     def dump_stats(self,  des_folder, mode="light_weight"):
+         file_name = config.verification_result_file
+         file_addr = os.path.join(des_folder, file_name)
+ 
+-        for type, id in self.dp.get_designs_SOCs():
+-            ic_count = len(self.dp.get_workload_to_hardware_map().get_blocks_by_type("ic"))
+-            mem_count = len(self.dp.get_workload_to_hardware_map().get_blocks_by_type("mem"))
+-            pe_count = len(self.dp.get_workload_to_hardware_map().get_blocks_by_type("pe"))
++        # for type, id in self.dp.get_designs_SOCs():
++        #     ic_count = len(self.dp.get_workload_to_hardware_map().get_blocks_by_type("ic"))
++        #     mem_count = len(self.dp.get_workload_to_hardware_map().get_blocks_by_type("mem"))
++        #     pe_count = len(self.dp.get_workload_to_hardware_map().get_blocks_by_type("pe"))
+         with open(file_addr, "w+") as output:
+             routing_complexity = self.dp.get_hardware_graph().get_routing_complexity()
+             simple_topology = self.dp.get_hardware_graph().get_simplified_topology_code()
+@@ -2480,8 +2647,10 @@
+     #           latency, power, area, and phasal behavior
+     # This is called within the constructor
+     def collect_stats(self, use_slack_management_estimation=False):
++        # print('@@ collect_stats called!')
+         for type, id in self.dp.get_designs_SOCs():
+             for metric_name in config.all_metrics:
++                # print("@@", type, id, metric_name)
+                 self.set_SOC_metric_value(metric_name, type, id) # data per SoC
+                 self.set_system_complex_metric(metric_name) # data per System
+ 
+@@ -2550,7 +2719,15 @@
+         workload_latency_dict = {}
+         for workload, last_task in self.database.get_workloads_last_task().items():
+             kernel = self.dp.get_kernel_by_task_name(self.dp.get_task_by_name(last_task))
+-            workload_latency_dict[workload] = kernel.get_completion_time() #kernel.stats.latency + kernel.starting_time
++            # we need to subtract the kernel's task's parent graph arrival time to calculate latency
++            workload_latency_dict[workload] = kernel.get_completion_time() - kernel.parent_graph_arr_time
++
++            if config.DROP_TASKS_THAT_PASSED_DEADLINE:
++                assert config.SINGLE_RUN
++                if kernel.dropped:
++                    workload_latency_dict[workload] = -1.
++
++        assert workload_latency_dict
+         return workload_latency_dict
+ 
+     # calculate SOC energy
+@@ -2563,29 +2740,68 @@
+     def calc_SOC_power(self, SOC_type, SOC_id, estimate_slack_management_effect=False):
+         self.power_duration_list[SOC_type][SOC_id] = []
+         sorted_listified_phase_latency_dict = sorted(self.dp.phase_latency_dict.items(), key=operator.itemgetter(0))
+-        sorted_latencys = [latency for phase,latency in sorted_listified_phase_latency_dict]
+         sorted_phase_latency_dict = collections.OrderedDict(sorted_listified_phase_latency_dict)
+ 
+         # get the energy first
+         SOC_phase_energy_dict  = self.dp.SOC_phase_energy_dict[(SOC_type, SOC_id)]
++        # print(f"SOC_phase_energy_dict[({SOC_type}, {SOC_id})]: ")
++        # pprint(SOC_phase_energy_dict)
+         sorted_listified_phase_energy_dict = sorted(SOC_phase_energy_dict.items(), key=operator.itemgetter(0))
+         sorted_phase_energy_dict = collections.OrderedDict(sorted_listified_phase_energy_dict)
++        # print(f"calc_SOC_power(): sorted_phase_energy_dict:")
++        # pprint(sorted_phase_energy_dict)
++
+ 
+         # convert to power by slicing the time with the smallest duration within which power should be
+         # calculated with (PWP)
+-        phase_bounds_lists = slice_phases_with_PWP(sorted_phase_latency_dict)
+         power_list = [] # list of power values collected based on the power collection freq
+         power_duration_list = []
+-        for lower_bnd, upper_bnd in phase_bounds_lists:
+-            if sum(sorted_latencys[lower_bnd:upper_bnd])>0:
+-                power_this_phase = sum(list(sorted_phase_energy_dict.values())[lower_bnd:upper_bnd])/sum(sorted_latencys[lower_bnd:upper_bnd])
++        if config.PCP is not None: # TODO enable for all runs, this is just for safety around paper deadline
++            sorted_latencys = [latency for phase,latency in sorted_listified_phase_latency_dict]
++            phase_bounds_lists = slice_phases_with_PWP(sorted_phase_latency_dict)
++            for lower_bnd, upper_bnd in phase_bounds_lists:
++                if sum(sorted_latencys[lower_bnd:upper_bnd])>0:
++                    power_this_phase = sum(list(sorted_phase_energy_dict.values())[lower_bnd:upper_bnd])/sum(sorted_latencys[lower_bnd:upper_bnd])
++                    power_list.append(power_this_phase)
++                    self.power_duration_list[SOC_type][SOC_id].append((power_this_phase, sum(sorted_latencys[lower_bnd:upper_bnd])))
++                else:
++                    power_list.append(0)
++                    power_duration_list.append((0,0))
++        else:
++            # simpler way of calculating power
++            for phase in sorted_phase_latency_dict.keys():
++                latency_this_phase = sorted_phase_latency_dict[phase] 
++                if latency_this_phase == 0.0:
++                    power_this_phase = 0.0
++                else:
++                    power_this_phase = sorted_phase_energy_dict[phase] / latency_this_phase
+                 power_list.append(power_this_phase)
+-                self.power_duration_list[SOC_type][SOC_id].append((power_this_phase, sum(sorted_latencys[lower_bnd:upper_bnd])))
+-            else:
+-                power_list.append(0)
+-                power_duration_list.append((0,0))
++                power_duration_list.append((power_this_phase, latency_this_phase))
+ 
+-        power = max(power_list)
++        blocks = self.dp.get_hardware_graph().get_blocks()
++
++        # add mem leakage power here because we didn't account for it during sim
++        mem_leakage_power = 0
++        for block in blocks:
++            if block.SOC_type == SOC_type and block.SOC_id == SOC_id and block.type == 'mem':
++                blk_leakage_power = block.get_leakage_power()
++                # print(f"<< block {block.instance_name}, leak pow: {blk_leakage_power}")
++                mem_leakage_power += blk_leakage_power
++
++        leakage_power = 0
++        if MEM_LEAKAGE_POWER:
++            leakage_power += mem_leakage_power
++        
++        power = max(power_list) + leakage_power
++        # print("Dynamic power each phase:", power_list)
++        # print(f"power: {power}, leakage power:", leakage_power, "Mem:", mem_leakage_power, "PE:", pe_leakage_power)
++
++        # tot_lat = 0.
++        # tot_ene = 0.
++        # for power, lat in self.power_duration_list[SOC_type][SOC_id]:
++        #     tot_ene += power * lat
++        #     tot_lat += lat
++        # power = tot_ene/tot_lat # now reporting average power, previously we were reporting max power for some reason
+ 
+         return power
+ 
+@@ -2618,7 +2834,8 @@
+ 
+     # get total area of an soc (type is not supported yet)
+     def calc_SOC_area_base_on_type(self, type_, SOC_type, SOC_id):
+-        blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        # blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        blocks = self.dp.get_hardware_graph().get_blocks()
+         total_area= sum([block.get_area() for block in blocks if block.SOC_type == SOC_type
+                          and block.SOC_id == SOC_id and block.type == type_])
+         return total_area
+@@ -2626,19 +2843,32 @@
+ 
+     # get total area of an soc (type is not supported yet)
+     def calc_SOC_area_base_on_subtype(self, subtype_, SOC_type, SOC_id):
+-        blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        # blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        blocks = self.dp.get_hardware_graph().get_blocks()
+         total_area = 0
+         for block in blocks:
+             if block.SOC_type == SOC_type and block.SOC_id == SOC_id and block.subtype == subtype_:
+                 total_area += block.get_area()
+         return total_area
+ 
++    # get total area of an soc (type is not supported yet)
++    def calc_SOC_area_in_bytes_base_on_subtype(self, subtype_, SOC_type, SOC_id):
++        # blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        assert (subtype_ == "sram" or subtype_ == "dram")
++        blocks = self.dp.get_hardware_graph().get_blocks()
++        total_area = 0
++        for block in blocks:
++            if block.SOC_type == SOC_type and block.SOC_id == SOC_id and block.subtype == subtype_:
++                total_area += block.get_area_in_bytes()
++        return total_area    
++
+     # get total area of an soc
+     # Variables:
+     #       SOC_type:the type of SOC you need information for
+     #       SOC_id: id of the SOC you are interested in
+     def calc_SOC_area(self, SOC_type, SOC_id):
+-        blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        # blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        blocks = self.dp.get_hardware_graph().get_blocks()
+         # note: we can't use phase_area_dict for this, since:
+         #   1. we double count the statically  2. if a memory is shared, we would be double counting it
+         total_area= sum([block.get_area() for block in blocks if block.SOC_type == SOC_type and  block.SOC_id == SOC_id])
+@@ -2676,7 +2906,8 @@
+ 
+     # calculate the development cost of an SOC
+     def calc_SOC_dev_cost(self, SOC_type, SOC_id):
+-        blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        # blocks = self.dp.get_workload_to_hardware_map().get_blocks()
++        blocks = self.dp.get_hardware_graph().get_blocks()
+         all_kernels = self.get_kernels_sort()
+ 
+         # find the simplest task's work (simple = task with the least amount of work)
+@@ -2695,7 +2926,10 @@
+                 # for IPs
+                 if block.subtype == "ip":
+                     tasks = block.get_tasks_of_block()
+-                    task_work = max([task.get_self_task_work() for task in tasks])  # use max incase multiple task are mapped
++                    if tasks:
++                        task_work = max([task.get_self_task_work() for task in tasks])  # use max incase multiple task are mapped
++                    else:
++                        task_work = 0.
+                     task_normalized_work = task_work/simplest_task_work
+                     dev_cost += self.PE_cost_model(task_normalized_work, "ip")
+                 # for GPPS
+@@ -2734,7 +2968,7 @@
+                 task_share_cnt = len(pe_tasks) - len(list(set(pe_tasks) - set(mem_tasks)))
+                 if task_share_cnt == 0:  # this condition to avoid finding paths between vertecies, which is pretty comp intensive
+                     continue
+-                path_length = len(self.dp.get_hardware_graph().get_path_between_two_vertecies(pe, mem))
++                path_length = len(self.dp.get_hardware_graph().get_path_between_two_vertices(pe, mem))
+                 #path_length = len(self.dp.get_hardware_graph().get_shortest_path(pe, mem, [], []))
+                 effort = self.database.db_input.porting_effort["ic"]/10
+                 dev_cost += (path_length*task_share_cnt)*.1
+@@ -2757,6 +2991,8 @@
+                 self.SOC_area_dict[block_type][SOC_type][SOC_id] = self.calc_SOC_area_base_on_type(block_type, SOC_type, SOC_id)
+             for block_subtype in ["sram", "dram", "ic", "gpp", "ip"]:
+                 self.SOC_area_subtype_dict[block_subtype][SOC_type][SOC_id] = self.calc_SOC_area_base_on_subtype(block_subtype, SOC_type, SOC_id)
++            for block_subtype in ["sram", "dram"]:
++                self.SOC_area_in_bytes_subtype_dict[block_subtype][SOC_type][SOC_id] = self.calc_SOC_area_in_bytes_base_on_subtype(block_subtype, SOC_type, SOC_id)
+ 
+         elif metric_type == "cost":
+             #self.SOC_metric_dict[metric_type][SOC_type][SOC_id] = self.calc_SOC_area(SOC_type, SOC_id)
+@@ -2808,6 +3044,7 @@
+             self.system_complex_metric_dict[metric_type] = self.operate_on_dicionary_values([self.get_SOC_metric_value(metric_type, type_, id_)
+                                                                                              for type_, id_ in type_id_list], operator.add)
+ 
++            # print(f"@@ Setting latency to {self.system_complex_metric_dict[metric_type]}")
+             #return res
+             #self.system_complex_metric_dict[metric_type] = sum([self.get_SOC_metric_value(metric_type, type_, id_)
+             #                                         for type_, id_ in type_id_list])
+@@ -2832,6 +3069,10 @@
+         assert(block_subtype in ["dram", "sram", "ic", "gpp", "ip"]), "block_subtype" + block_subtype + " is not supported"
+         return self.SOC_area_subtype_dict[block_subtype][SOC_type][SOC_id]
+ 
++    def get_SOC_area_in_bytes_base_on_subtype(self, block_subtype, SOC_type, SOC_id):
++        assert(block_subtype in ["dram", "sram"]), "block_subtype" + block_subtype + " is not supported"
++        return self.SOC_area_in_bytes_subtype_dict[block_subtype][SOC_type][SOC_id]
++
+ 
+     # get the simulation progress
+     def get_SOC_s_latency_sim_progress(self, SOC_type, SOC_id, progress_metrics):
+@@ -2861,8 +3102,6 @@
+ 
+ 
+     def get_sim_progress(self, metric="latency"):
+-        #for phase, krnls in self.dp.phase_krnl_present.items():
+-        #    accelerators_in_parallel = []
+         if metric == "latency":
+             return [self.get_SOC_s_latency_sim_progress(type, id, metric) for type, id in self.dp.get_designs_SOCs()]
+         if metric == "bytes":
+@@ -2890,7 +3129,7 @@
+                     mems = [blk for blk in krnl.get_blocks() if blk.type == "mem"]
+                     pe = [blk for blk in krnl.get_blocks() if blk.type == "pe"][0]
+                     for mem in mems:
+-                        max_hop = max(len(self.dp.get_hardware_graph().get_path_between_two_vertecies(pe, mem))-2, max_hop)
++                        max_hop = max(len(self.dp.get_hardware_graph().get_path_between_two_vertices(pe, mem))-2, max_hop)
+                     hop_time += max_hop*krnl.stats.phase_latency_dict[phase]
+                     total_time += krnl.stats.phase_latency_dict[phase]
+                 else:
+@@ -2978,7 +3217,9 @@
+     def get_system_complex_metric(self, metric_type):
+         assert(metric_type in config.all_metrics), metric_type + " not supported"
+         assert(not (self.system_complex_metric_dict[metric_type] == -1)), metric_type + "not calculated"
+-        return self.system_complex_metric_dict[metric_type]
++        rc = self.system_complex_metric_dict[metric_type]
++        # print(f"@@ get_system_complex_metric {metric_type} {rc}")
++        return rc
+ 
+     # check if dp_rep is meeting the budget
+     def fits_budget(self, budget_coeff):
+@@ -3011,4 +3252,4 @@
+         comp_list = []
+         for metric in config.objectives:
+             comp_list.append(self.get_system_complex_metric(metric) > other.get_system_complex_metric(metric))
+-        return all(comp_list)
+\ No newline at end of file
++        return all(comp_list)

@@ -1,0 +1,127 @@
+--- ./Project_FARSI_orig/DSE_utils/design_space_exploration_handler.py
++++ ./Project_FARSI/DSE_utils/design_space_exploration_handler.py
+@@ -19,18 +19,24 @@
+     raise NameError("Simulation method unavailable")
+ import random
+ import pickle
++import sys
++sys.path.append("../../artemis_core")
++from selection_policies.block_selection import DataBase_ARTEMIS
++from selection_policies.task_selection import HillClimbing_ARTEMIS
+ 
+ # class used for deign handling.
+ # This class uses an exploration algorithm (such as hill climbing to explore the design space)
+ # specify the exploration algorithm in the config file.
+ class DSEHandler:
+-    def __init__(self, result_dir=os.getcwd()):
++    def __init__(self, farsi_start_time, result_dir=os.getcwd(), result_dir_mod=os.getcwd()):
+         self.check_pointed_best_sim_dps = []  # list of check pointed simulated designs
+         self.check_pointed_best_ex_dps = []   # list of check pointed example designs
+         self.dse = None                       # design space exploration algorithm
+-        self.database = None                  # data base (contains hw and sw database for mapping/allocation of hw/sw)
++        self.database:DataBase = None                  # data base (contains hw and sw database for mapping/allocation of hw/sw)
+         self.IP_library = []
+         self.result_dir = result_dir
++        self.FARSI_start_time = farsi_start_time
++        self.viz_dir = result_dir_mod
+         self.check_point_folder_name = "check_points"
+         self.check_point_ctr = 0
+         return None
+@@ -45,8 +51,15 @@
+         FARSI_gen_process_id = system_workers[3]
+ 
+         if config.dse_type == "exhaustive":
+-            self.database = DataBase(db_input, hw_sampling)
+-            self.dse = hill_climbing.HillClimbing(self.database, self.result_dir)
++            if config.RT_AWARE_BLK_SEL:
++                self.database = DataBase_ARTEMIS(db_input, hw_sampling)
++            else:
++                self.database = DataBase_FARSI(db_input, hw_sampling)
++
++            if config.RT_AWARE_TASK_SEL:
++                self.dse = HillClimbing_ARTEMIS(self.FARSI_start_time, self.database, self.result_dir, self.viz_dir)
++            else:
++                self.dse = hill_climbing.HillClimbing_FARSI(self.FARSI_start_time, self.database, self.result_dir, self.viz_dir)
+ 
+             # generate light systems
+             start = time.time()
+@@ -64,7 +77,10 @@
+             start = time.time()
+             all_sims = []
+             for ex_dp in all_exs:
+-                sim_dp = self.dse.eval_design(ex_dp, self.database)
++                if config.DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++                    ex_dp, sim_dp = self.dse.eval_design(ex_dp, self.database)
++                else:
++                    sim_dp = self.dse.eval_design(ex_dp, self.database)
+                 if config.RUN_VERIFICATION_PER_GEN or config.RUN_VERIFICATION_PER_NEW_CONFIG  or config.RUN_VERIFICATION_PER_IMPROVMENT:
+                     self.dse.gen_verification_data(sim_dp, ex_dp)
+                 all_sims.append(sim_dp)
+@@ -144,9 +160,15 @@
+         # body
+         if config.dse_type == "hill_climbing" or config.dse_type == "moos" or config.dse_type == "simple_greedy_one_sample":
+             exploration_start_time = time.time()  # time hooks (for data collection)
+-            self.database = DataBase(db_input, hw_sampling)   # initialize the database
++            if config.RT_AWARE_BLK_SEL:
++                self.database = DataBase_ARTEMIS(db_input, hw_sampling)   # initialize the database
++            else:
++                self.database = DataBase_FARSI(db_input, hw_sampling)   # initialize the database
+             # initializes the design space exploration of certain type
+-            self.dse = hill_climbing.HillClimbing(self.database, self.result_dir)
++            if config.RT_AWARE_TASK_SEL:
++                self.dse = HillClimbing_ARTEMIS(self.FARSI_start_time, self.database, self.result_dir, self.viz_dir)
++            else:
++                self.dse = hill_climbing.HillClimbing_FARSI(self.FARSI_start_time, self.database, self.result_dir, self.viz_dir)
+         elif config.dse_type == "exhaustive":
+             print("this main is not suitable for exhaustive search")
+             exit(0)
+@@ -279,8 +301,15 @@
+         if not os.path.isdir(result_dir_specific):
+             os.makedirs(result_dir_specific)
+ 
+-        compute_system_attrs = sim_dp.dp_stats.get_compute_system_attr()
+-        bus_system_attrs = sim_dp.dp_stats.get_bus_system_attr()
++        #TODO: HACK to avoid errors, fix later
++        try:
++            compute_system_attrs = sim_dp.dp_stats.get_compute_system_attr()
++        except:
++            compute_system_attrs = {'':''}
++        try:
++            bus_system_attrs = sim_dp.dp_stats.get_bus_system_attr()
++        except:
++            bus_system_attrs = {'':''}
+         memory_system_attrs = sim_dp.dp_stats.get_memory_system_attr()
+         speedup_dict, speedup_attrs = sim_dp.dp_stats.get_speedup_analysis(dse)
+ 
+@@ -479,10 +508,10 @@
+         output_fh_minimal.write(
+             str(config.transformation_selection_mode) + ",")  # for now only write the latency accuracy as the other
+         output_fh_minimal.write(str(
+-            sim_dp.dp_stats.dist_to_goal(metrics_to_look_into=["area", "latency", "power", "cost"],
++            sim_dp.dp_stats.dist_to_goal(metrics_to_look_into=config.budgetted_metrics,
+                                          mode="eliminate")) + ",")
+         output_fh_minimal.write(str(
+-            sim_dp.dp_stats.dist_to_goal(metrics_to_look_into=["area", "latency", "power"], mode="eliminate")) + ",")
++            sim_dp.dp_stats.dist_to_goal(metrics_to_look_into=[metric for metric in config.budgetted_metrics if metric != "cost"], mode="eliminate")) + ",")
+         output_fh_minimal.write(str(blk_cnt) + ",")  # for now only write the latency accuracy as the other
+         output_fh_minimal.write(str(pe_cnt) + ",")  # for now only write the latency accuracy as the other
+         output_fh_minimal.write(str(bus_cnt) + ",")  # for now only write the latency accuracy as the other
+@@ -618,12 +647,12 @@
+             counters_pickled_file.close()
+             #vis_hardware.vis_hardware(self.dse.so_far_best_ex_dp, config.hw_graphing_mode, result_folder)
+ 
+-        for key, val in self.dse.so_far_best_sim_dp.dp_stats.SOC_metric_dict["latency"]["glass"][0].items():
+-            print("lat is {} for {}".format(val, key))
+-            burst_size = config.default_burst_size
+-            queue_size = config.default_data_queue_size
+-            print("burst size is {}".format(burst_size))
+-            print("queue size is {}".format(queue_size))
++        # for key, val in self.dse.so_far_best_sim_dp.dp_stats.SOC_metric_dict["latency"]["glass"][0].items():
++        #     print("lat is {} for {}".format(val, key))
++        #     burst_size = config.default_burst_size
++        #     queue_size = config.default_data_queue_size
++        #     print("burst size is {}".format(burst_size))
++        #     print("queue size is {}".format(queue_size))
+ 
+         #self.dse.write_data_log(list(self.dse.get_log_data()), self.dse.reason_to_terminate, "", result_folder, self.check_point_ctr,
+         #              config.FARSI_simple_run_prefix)

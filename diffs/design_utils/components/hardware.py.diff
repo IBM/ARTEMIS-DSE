@@ -1,0 +1,1165 @@
+--- ./Project_FARSI_orig/design_utils/components/hardware.py
++++ ./Project_FARSI/design_utils/components/hardware.py
+@@ -2,18 +2,20 @@
+ #This source code is licensed under the MIT license found in the
+ #LICENSE file in the root directory of this source tree.
+ 
++import networkx as nx
+ import json
+ import os
+ import itertools
+ from settings import config
+-from typing import List, Tuple
++from typing import List, Tuple, Dict, Set
+ from design_utils.components.workload import *
+ import copy
+ import math
+ import time
++import pandas as pd
++from pprint import pprint
+ from collections import deque
+ 
+-
+ # This class emulates hardware queues.
+ # At the moment, we are using the pipe class to the same thing
+ # so not using this class
+@@ -94,10 +96,10 @@
+         self.work_over_energy_distribution = work_over_energy_distribution  # work over energy
+         self.work_over_area_distribution = work_over_area_distribution  # work over area
+         self.one_over_area_distribution = one_over_area_distribution
++        self.leakage_power = leakage_power
+         self.set_rates(hw_sampling)  # set the above rates based on the hardware sampling. Note that
+                                      # the above rate can vary if they are a distribution rather than
+                                      # one value
+-        self.leakage_power = leakage_power
+ 
+         # power knobs of the block
+         self.power_knobs = power_knobs
+@@ -112,7 +114,7 @@
+         self.pipe_clusters = []
+         self.type = type  # type of the block (i.e., pe, mem, ic)
+         self.neighs: List[Block] = []  # neighbours, i.e., the connected blocks
+-        self.__task_name_dir_list = []  #  tasks on the block
++        # self.__task_name_dir_list = []  #  tasks on the block
+ 
+         # task_dir is the tuple specifying which task is making a request to access memory and in which direction.
+         self.__tasks_dir_work_ratio: Dict[(Task, str): float] = {}  # tasks on the block and their work ratio.
+@@ -134,6 +136,15 @@
+         self.area_task_dir_list = []
+         self.task_mem_map_dict  = {}  # memory map associated with different tasks for memory
+         self.system_bus_behavior = False # if true, the block is system bus
++        
++        # Track only for PE blocks
++        self.busy = False #if true a kernel is scheduled and executing on the block
++        self.kernel_running = None # Track the kernel running on the block
++    
++    def reset_area_lists(self):
++        self.area_task_dir_list = []
++        self.area_list = [0]  # list of areas for different task calls
++        self.area_in_bytes_list = [0]  # list of areas for different task calls
+ 
+     def set_system_bus_behavior(self, qualifier):
+         system_bus_behavior = qualifier
+@@ -210,9 +221,9 @@
+ 
+     # Return the private variable leakage energy
+     # if a power_knob is used then return the leakage energy associated with that knob
+-    def get_leakage_power(self, pk_id=0):
++    def get_leakage_power(self, pk_id:int=0) -> float:
+ 
+-        if (pk_id == 0) or (self.type != "pe"):
++        if (pk_id == 0):
+             return self.leakage_power
+         else:
+             (perf_change, dyn_power_change, leakage_power_change) = self.power_knobs[pk_id - 1]
+@@ -249,8 +260,11 @@
+         accuracy_percentage = hw_sampling["accuracy_percentage"][self.subtype]
+         if mode in ["random", "most_likely", "min", "max", "most_likely_with_accuracy_percentage"]:
+             if mode == "random":
+-                time.sleep(.005)
+-                np.random.seed(datetime.now().microsecond)
++                if (config.DEBUG_FIX):
++                    np.random.seed(0)
++                else:
++                    time.sleep(.005)
++                    np.random.seed(datetime.now().microsecond)
+                 # sample the peak_work_rate
+                 work_rates = [work_rate for work_rate, work_rate_prob in self.get_peak_work_rate_distribution().items()]
+                 work_rate_probs = [work_rate_prob for work_rate, work_rate_prob in self.get_peak_work_rate_distribution().items()]
+@@ -275,7 +289,9 @@
+ 
+             self.peak_work_rate = list(self.get_peak_work_rate_distribution().keys())[work_rate_idx]
+             self.work_over_energy = list(self.get_work_over_energy_distribution().keys())[work_rate_idx]
+-            self.one_over_power = self.work_over_energy*(1/self.peak_work_rate)
++            self.one_over_total_power = self.work_over_energy*(1/self.peak_work_rate)
++            if self.leakage_power != "":
++                self.one_over_total_power = 1/(self.leakage_power + 1/(self.work_over_energy*(1/self.peak_work_rate)))
+             try:
+                 self.work_over_area = list(self.get_work_over_area_distribution().keys())[work_rate_idx]
+                 self.one_over_area = list(self.get_one_over_area_distribution().keys())[work_rate_idx]
+@@ -287,7 +303,9 @@
+             self.work_over_energy = self.get_avg(self.get_work_over_energy_distribution())
+             self.work_over_area = self.get_avg(self.get_work_over_area_distribution())
+             self.one_over_area = self.get_avg(self.get_one_over_area_distribution())
+-            self.one_over_power = self.work_over_energy*(1/self.peak_work_rate)
++            self.one_over_total_power = self.work_over_energy*(1/self.peak_work_rate)
++            if self.leakage_power != "":
++                self.one_over_total_power = 1/(self.leakage_power + 1/(self.work_over_energy*(1/self.peak_work_rate)))
+         else:
+             print("mode" + mode + " is not supported for block sampling")
+             exit(0)
+@@ -298,7 +316,7 @@
+             self.work_over_energy *= accuracy_percentage['energy']
+             self.work_over_area *= accuracy_percentage['area']
+             self.one_over_area *=  accuracy_percentage['one_over_area']
+-            self.one_over_power *=  accuracy_percentage['energy']
++            self.one_over_total_power *=  accuracy_percentage['energy']
+ 
+     # -------------------------------------------
+     # power-knobs related functions
+@@ -384,6 +402,8 @@
+     #       get the area in terms of byte. only for memory. Then we can convert it to mm^2 easily
+     # --------------------------
+     def get_area_in_bytes(self):
++        if self.type == "ic":
++            return 0
+         if not self.type == "mem":
+             print("area in byte for non-memory blocks are not defined")
+             return 0
+@@ -421,6 +441,10 @@
+         self.area_list = [area]
+         self.area = area
+ 
++    def set_leakage_power_directly(self, leakage_power):
++        self.leakage_power = leakage_power
++        self.one_over_total_power = 1/(self.leakage_power + 1/(self.work_over_energy*(1/self.peak_work_rate)))
++
+     # used with cacti
+     def update_area_energy_power_rate(self, energy_per_byte, area_per_byte):
+         if self.type not in ["mem", "ic"]:
+@@ -428,7 +452,9 @@
+             exit(0)
+         self.work_over_area = 1/area_per_byte
+         self.work_over_energy = 1/max(energy_per_byte,.0000000001)
+-        self.one_over_power = self.work_over_energy/self.peak_work_rate
++        self.one_over_total_power = self.work_over_energy*(1/self.peak_work_rate)
++        if self.leakage_power != "":
++            self.one_over_total_power = 1/(self.leakage_power + 1/(self.work_over_energy*(1/self.peak_work_rate)))
+         self.one_over_area = self.work_over_area
+ 
+     # ---------------------------
+@@ -445,6 +471,8 @@
+            self.area =  max(self.area_list)
+         return self.area
+ 
++    def get_latest_area_in_bytes(self): return self.area_in_bytes_list[-1]
++
+     def get_leakage_power_calculated_after(self):
+         if self.type == "mem":
+             max_work = max(self.area_list)*self.db_input.ref_mem_work_over_area
+@@ -462,6 +490,10 @@
+     def instance_name_without_id(self):
+         return self.__instance_name
+ 
++    @property
++    # replace the last occurrence because ics have "ic" twice in their instance_name
++    def instance_type(self):
++        return ''.join(self.__instance_name.rsplit(f"_{self.type}", 1))
+ 
+     @property
+     def instance_name(self):
+@@ -506,7 +538,7 @@
+             if area < 0: dir = 'read'
+             else: dir = 'write'
+             if (self.area_list[-1]+area) < -1*self.db_input.misc_data["area_error_margin"] and not config.use_cacti:
+-                raise Exception("memory size can not go bellow the error margin")
++                raise Exception(f"memory size can not go bellow the error margin, requested: {(self.area_list[-1]+area)}")
+             #if dir == "write":
+             #    self.task_mem_map_dict[task_requesting] = (hex(int(self.area_list[-1])), hex(int(self.area_list[-1]+area)))
+             self.area_list.append(self.area_list[-1]+area)
+@@ -515,14 +547,14 @@
+             if self.only_dummy_tasks():
+                 area = 0
+             self.area_list.append(area)
+-
++        # print(f"&& {self.instance_name}, {task_requesting} updated area = {self.area_in_bytes_list}, {area}")
+ 
+     def update_area_in_bytes(self, area_in_byte, task_requesting):  # note that bytes can be negative (if reading from the block) or positive
+         if self.type == "mem":
+             if area_in_byte < 0: dir = 'read'
+             else: dir = 'write'
+             if (self.area_in_bytes_list[-1]+area_in_byte) < -1*self.db_input.misc_data["area_error_margin"]:
+-                raise Exception("memory size can not go bellow the error margin")
++                raise Exception(f"memory size can not go bellow the error margin, requested: {(self.area_in_bytes_list[-1]+area_in_byte)}")
+             #if dir == "write":
+             #    self.task_mem_map_dict[task_requesting] = (hex(int(self.area_in_bytes_list[-1])), hex(int(self.area_in_bytes_list[-1]+area_in_byte)))
+             self.area_in_bytes_list.append(self.area_in_bytes_list[-1]+area_in_byte)
+@@ -531,6 +563,8 @@
+                 area = 0
+             self.area_in_bytes_list.append(area_in_byte)
+ 
++        # print(f"&& {self.instance_name}, updated area_in_byte = {self.area_in_bytes_list}, {area_in_byte}")
++
+ 
+     def __deepcopy__(self, memo):
+         #Block.id_counter = -1
+@@ -561,14 +595,14 @@
+ 
+     # ---------------------------
+     # Functionality:
+-    #       get all task's parents/children and the work ratio between them.
++    #       print all task's parents/children and the work ratio between them.
+     #       "dir" determines whether the family task is parent or child.
+     #       "work_ratio" is the ratio between the work of the family member and the task itself.
+     # --------------------------
+-    def get_tasks_dir_work_ratio_for_printing(self):
+-        temp_dict = []
+-        for task_dir, work_ratio in self.__tasks_dir_work_ratio.items():
+-            print((task_dir[0].name, task_dir[1]), work_ratio)
++    def print_tasks_dir_work_ratio(self): 
++        print(f">> Block {self.instance_name}")
++        for t_d, wr_dict in self.__tasks_dir_work_ratio.items():
++            print(f">>\ttask {t_d[0].name} {t_d[1]}, {list(wr_dict.keys())}")
+ 
+     # ---------------------------
+     # Functionality:
+@@ -588,9 +622,9 @@
+         for task in tasks:
+             if (task.name == task_name):
+                 return True, task
+-        print("erroring out for block" + self.instance_name)
+-        self.get_tasks_dir_work_ratio_for_printing()
+-        print("task with the name of " + task_name + "is not loaded on block" + self.instance_name)
++        print(f"Erroring out for block {self.instance_name}")
++        self.print_tasks_dir_work_ratio()
++        print(f"Task with the name of {task_name} is not loaded on block {self.instance_name}")
+         return False, "_"
+ 
+     # ---------------------------
+@@ -604,18 +638,6 @@
+                 work_ratio = task.get_work_ratio_by_family_task_name(family_task_name)
+                 self.__tasks_dir_work_ratio[task_dir][family_task_name] = work_ratio  # where work ratio is set
+ 
+-        self.__task_name_dir_list = []
+-        for task_dir, family_tasks_name in self.__tasks_dir_work_ratio.items():
+-            task, dir = task_dir
+-            for family_task_name in family_tasks_name.keys():
+-                self.__task_name_dir_list.append((task.name, dir))
+-
+-        # the following copule of lines for debugging
+-        if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
+-            blah =  len(self.__task_name_dir_list)
+-            blah2  =  sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
+-            print("this shoud not happend, so please debug")
+-
+     # get the fronts that will be/has been scheduled on the block
+     # Note that front is a stream of data/instruction.
+     # for PEs, it's just a bunch of instructions sliced up to chunks
+@@ -623,7 +645,8 @@
+     # another block (bus, memory). This class is not used for the moment
+     def get_fronts(self, mode="task_name_dir"):
+         if mode == "task_name_dir":
+-            return self.__task_name_dir_list
++            raise NotImplementedError
++            # return self.__task_name_dir_list
+         elif mode == 'task_dir_work_ratio':
+             result = []
+             for el in self.__tasks_dir_work_ratio.values():
+@@ -636,7 +659,7 @@
+     # Functionality:
+     #       get the task_dir
+     # --------------------------
+-    def get_task_dirs_of_block(self):
++    def get_task_dirs_of_block(self) -> List[Tuple[Task, dir]]:
+         tasks_with_possible_duplicates = [task_dir for task_dir in self.__tasks_dir_work_ratio.keys()]
+         # the duplicates happens cause  we can have one task that writes and reads into that block
+         return list(set(tasks_with_possible_duplicates))
+@@ -645,7 +668,8 @@
+     # Functionality:
+     #       get the tasks of a block
+     # --------------------------
+-    def get_tasks_of_block(self):
++    def get_tasks_of_block(self) -> List[Task]:
++        # print(f"self.__tasks_dir_work_ratio for block {self.instance_name} = {self.__tasks_dir_work_ratio}")
+         tasks_with_possible_duplicates = [task_dir[0] for task_dir in self.__tasks_dir_work_ratio.keys()]
+         #if len(tasks_with_possible_duplicates) == 0:
+         #    print("what")
+@@ -661,7 +685,6 @@
+         results = list(set(tasks_with_possible_duplicates))
+         return results
+ 
+-
+     # ---------------------------
+     # Functionality:
+     #       get the tasks work ratio by the family task.
+@@ -753,16 +776,19 @@
+     #       task: task to load (map)
+     #       family_task: family task is a task that write/read to another task
+     # --------------------------
+-    def load_improved(self, task, family_task):
+-
++    def load_improved(self, task:Task, family_task:Task):
++        # print(f"load_improved(): block {self.instance_name}, task {task.name}, family_task {family_task.name}")
+         # the following copule of lines for debugging
+-        if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
+-            blah =  len(self.__task_name_dir_list)
+-            blah2  =  sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
+-            print("this shoud not happend, so please debug")
++        # if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
++        #     blah =  len(self.__task_name_dir_list)
++        #     blah2  =  sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
++        #     print("this shoud not happend, so please debug")
+ 
+         # determine relationship between the tasks
++        assert task != None
++        assert family_task != None
+         relationship = task.get_relationship(family_task)
++        # print(f"@@ relationship b/w task = {task.name} and family task = {family_task.name} = {relationship}")
+         if relationship == "parent": dir= "read"
+         elif relationship == "child": dir = "write"
+         elif relationship == "self": dir = "loop_back"
+@@ -772,19 +798,19 @@
+         task_dir = (task, dir)
+         work_ratio = task.get_work_ratio(family_task)
+         if task_dir in self.__tasks_dir_work_ratio.keys():
+-            if not family_task.name in self.__tasks_dir_work_ratio[task_dir].keys():
+-                self.__task_name_dir_list.append((task.name, dir))
++            # if not family_task.name in self.__tasks_dir_work_ratio[task_dir].keys():
++            #     self.__task_name_dir_list.append((task.name, dir))
+             self.__tasks_dir_work_ratio[task_dir][family_task.name] = work_ratio# where work ratio is set
+         else:
+             self.__tasks_dir_work_ratio[task_dir] = {}
+             self.__tasks_dir_work_ratio[task_dir][family_task.name] = work_ratio  # where work ratio is set
+-            self.__task_name_dir_list.append((task.name, dir))
++            # self.__task_name_dir_list.append((task.name, dir))
+ 
+         # the following copule of lines for debugging
+-        if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
+-            blah =  len(self.__task_name_dir_list)
+-            blah2  =  sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
+-            print("this should not happen, so please debug")
++        # if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
++        #     blah =  len(self.__task_name_dir_list)
++        #     blah2  =  sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
++        #     print("this should not happen, so please debug")
+ 
+     # add a pipe for the block.
+     def set_pipe(self, pipe_):
+@@ -809,7 +835,6 @@
+                 clusters.append(pipe_cluster)
+         return clusters
+ 
+-
+     def get_pipes(self, channel_name):
+         block = self
+         result = []
+@@ -845,18 +870,30 @@
+     #      unload all the tasks that read from the block
+     # --------------------------
+     def unload_read(self):
++        # print(f"unload_read called for {self.instance_name}")
+         change = True
+         delete = [task_dir for task_dir in self.__tasks_dir_work_ratio if task_dir[1] == "read"]
+         for el in delete: del self.__tasks_dir_work_ratio[el]
+ 
+-        list_delete = [task_dir for task_dir in self.__task_name_dir_list if task_dir[1] == "read"]
+-        for el in list_delete: self.__task_name_dir_list.remove(el)
++        # list_delete = [task_dir for task_dir in self.__task_name_dir_list if task_dir[1] == "read"]
++        # for el in list_delete: self.__task_name_dir_list.remove(el)
+ 
+-        # the following copule of lines are for debugging. get rid of it
+-        if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
+-            blah= len(self.__task_name_dir_list)
+-            blah2=sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
+-            print("this should not happen, so please debug")
++        # # the following copule of lines are for debugging. get rid of it
++        # if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
++        #     blah= len(self.__task_name_dir_list)
++        #     blah2=sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
++        #     print("this should not happen, so please debug")
++
++    # ---------------------------
++    # Functionality:
++    #      unload a specific task from the block
++    #      e.g., used to unload a given data movement edge from memory in a particular direction (read/write)
++    # --------------------------
++    def unload_improved(self, task, family_task, dir_):
++        task_dir = (task, dir_)
++        del self.__tasks_dir_work_ratio[task_dir][family_task.name]
++        if not self.__tasks_dir_work_ratio[task_dir]:
++            del self.__tasks_dir_work_ratio[task_dir]
+ 
+     # ---------------------------
+     # Functionality:
+@@ -866,25 +903,27 @@
+     # --------------------------
+     def unload(self, task_dir):
+         task, dir = task_dir
+-        if  not (task.name, dir) in self.__task_name_dir_list:
+-            print("what")
++        # print(f"unload called for {self.instance_name} with task {task.name}, dir {dir}")
++        # if  not (task.name, dir) in self.__task_name_dir_list:
++        #     print("what", [task.name, dir], self.__task_name_dir_list)
+ 
+-        while (task.name, dir) in self.__task_name_dir_list:
+-            self.__task_name_dir_list.remove((task.name, dir))
++        # while (task.name, dir) in self.__task_name_dir_list:
++        #     self.__task_name_dir_list.remove((task.name, dir))
+         del self.__tasks_dir_work_ratio[task_dir]
+ 
+-        # the following couple of lines are for debugging. get rid of it
+-        if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
+-            blah =  len(self.__task_name_dir_list)
+-            blah2  =  sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
+-            print("this shoud not happend, so please debug")
++        # # the following couple of lines are for debugging. get rid of it
++        # if not len(self.__task_name_dir_list) == sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()]):
++        #     blah =  len(self.__task_name_dir_list)
++        #     blah2  =  sum([len(el.values()) for el in self.__tasks_dir_work_ratio.values()])
++        #     print("this shoud not happend, so please debug")
+ 
+     # ---------------------------
+     # Functionality:
+     #      unload all the tasks.
+     # --------------------------
+     def unload_all(self):
+-        self.__task_name_dir_list = []
++        # print(f"unload_all called for {self.instance_name}")
++        # self.__task_name_dir_list = []
+         self.__tasks_dir_work_ratio = {}
+ 
+     # ---------------------------
+@@ -922,6 +961,8 @@
+         self.work = work  # work
+         self.dir = dir  # direction (read/write/loop)
+ 
++    def get_dir(self):
++        return self.dir
+ 
+     def get_child(self):
+         return self.child
+@@ -1109,7 +1150,14 @@
+     def get_slave(self):
+         return self.slave
+ 
+-    def update_traffic_and_dir(self, parent , child, work, dir):
++    def remove_traffic_and_dir(self, parent, child, work, dir):
++        if dir not in self.dir:
++            print("this should not happen. Same direction should be assigned all the time")
++            exit(0)
++
++        self.traffics = [traffic for traffic in self.traffics if not (traffic.get_child() == child and traffic.get_parent() == parent and traffic.get_dir() == dir)]
++
++    def update_traffic_and_dir(self, parent, child, work, dir):
+         if dir not in self.dir:
+             print("this should not happen. Same direction should be assigned all the time")
+             exit(0)
+@@ -1190,27 +1238,53 @@
+         self.pipe_clusters = []
+         self.last_pipe_assigned_number = 0  # this is used for setting up the pipes.
+         self.last_cluster_assigned_number = 0
+-        self.blocks = self.traverse_neighs_recursively(block_to_prime_with, []) # all the blocks in the graph
++        # print(f"block_to_prime_with = {block_to_prime_with.instance_name}")
++        self.blocks:List[Block] = self.traverse_neighs_recursively(block_to_prime_with, []) # all the blocks in the graph
++
++        # for block in self.blocks:
++        #     print(block.instance_name)
++
++        # for task in self.get_all_tasks():
++        #     print(task.name, [block.instance_name for block in self.get_blocks_of_task(task)])
+         self.task_graph = TaskGraph(self.get_all_tasks())  # the task graph
+         self.config_code = str(-1) # used to differentiat between systems (focuses on type/number of elements)
+         self.SOC_design_code= "" # used to differentiat between systems (focuses on type/number of elements)
+         self.simplified_topology_code = str(-1)  # used to differential between systems (focuses on number of elements)
++        self.hw_graph_nx = self.gen_nx_graph_hw()
++        if config.MEMOIZE_SHORTEST_PATHS:
++            self.gen_shortest_paths_all_combs()
++        # nx.write_graphml(self.hw_graph_nx, "temp.graphml")
+         self.pipe_design()  # set up the pipes
+         self.generation_mode = generation_mode
+ 
+-
++    # generate memoized shortest paths from every source block to every dest block in the design
++    def gen_shortest_paths_all_combs(self):
++        # print("@@ recalculating shortest paths")
++        self.shortest_paths = {}
++        for blk_src in self.get_blocks():
++            for blk_dst in self.get_blocks():
++                self.shortest_paths[(blk_src, blk_dst)] = self.get_shortest_path(blk_src, blk_dst, [], [])
++                # print(f"@@ shortest path {blk_src.instance_name} -> {blk_dst.instance_name} = {[b.instance_name for b in self.shortest_paths[(blk_src, blk_dst)]]}")
+ 
+     def get_blocks(self):
+         return self.blocks
+ 
++    # return blocks of a specific type, e.g., mem
++    def get_blocks_of_type(self, type):
++        blocks = []
++        for block in self.blocks:
++            if block.type == type:
++                blocks.append(block)
++        return blocks
++
+     # get a pipe, given it's master and slave
+     def get_pipe_with_master_slave(self, master_, slave_, dir_):
+         for pipe in self.pipes:
+             if pipe.get_master() == master_ and pipe.get_slave() == slave_ and dir_ in pipe.get_dir():
+                 return pipe
+ 
+-        print("this pipe was not found. something wrong")
+-        master_to_slave_path = self.get_path_between_two_vertecies(master_, slave_)
++        print(f"{master_.instance_name} -> {slave_.instance_name} this pipe was not found. something wrong")
++        master_to_slave_path = self.get_path_between_two_vertices(master_, slave_)
+         exit(0)
+ 
+     # do sanity check on the pipe
+@@ -1249,6 +1323,7 @@
+         if block in blocks_visited:
+             return None
+         blocks_visited.append(block)
++        assert block.neighs, f"Block {block.instance_name} is unconnected!"
+         for neigh in block.neighs:
+             self.traverse_neighs_recursively(neigh, blocks_visited)
+         return blocks_visited
+@@ -1256,8 +1331,10 @@
+     # a node is unnecessary when no task lives on it.
+     # this happens when we apply moves (e.g., migrate tasks around)
+     def prune_unnecessary_nodes(self, block_to_prime_with): # depth first search
++        # print("prune_unnecessary_nodes")
+         blocks = self.traverse_neighs_recursively(block_to_prime_with, [])
+         for block in blocks:
++            # print(f"block {block.instance_name}, type = {block.type}")
+             if block.type == "ic":
+                 connectd_pes = [block_ for block_ in block.get_neighs() if block_.type == "pe"]
+                 connectd_mems = [block_ for block_ in block.get_neighs() if block_.type == "mem"]
+@@ -1287,6 +1364,41 @@
+                         for ic in connected_ics[1:]:
+                             ic.connect(ic_to_connect_to)
+                             block.disconnect(ic)
++                    if block_to_prime_with.instance_name == block.instance_name:
++                        for b in blocks:
++                            if b.instance_name != block.instance_name and "MEM" not in b.instance_name:
++                                block_to_prime_with = b
++                                break
++                    del block
++        return block_to_prime_with
++
++    # ---------------------------
++    # Functionality:
++    #     Prune PE blocks that have no tasks mapped to them. Can only happen when scheduler used in DSE loop.
++    # --------------------------
++    def prune_blocks_with_no_tasks(self):
++        # print("@@ Before prune_blocks_with_no_tasks")
++        # print(f"blocks: {[b.instance_name for b in self.get_blocks()]}")
++        block_to_prime_with = self.get_root()
++        for block in self.get_blocks():
++            # print(f"@@ block {block.instance_name} block type: {block.type}")
++            if block.type == "pe":
++                if len(block.get_tasks_of_block()) == 0:
++                    # print(f"Disconnecting block: {block.instance_name}")
++                    block.disconnect_all()
++                    if self.get_root().instance_name == block.instance_name: # we deleted the original root, so now find a new root
++                        for b in self.blocks:
++                            if b.instance_name != block.instance_name and "MEM" not in b.instance_name:
++                                block_to_prime_with = b
++                                break
++                    del block
++        self.blocks = self.traverse_neighs_recursively(block_to_prime_with, [])
++        # print("@@ After prune_blocks_with_no_tasks")
++        # print(f"blocks: {[b.instance_name for b in self.get_blocks()]}")
++        self.set_config_code()
++        self.set_SOC_design_code()
++        # if config.MEMOIZE_SHORTEST_PATHS:
++        #     self.gen_shortest_paths_all_combs()
+ 
+     # ---------------------------
+     # Functionality:
+@@ -1318,11 +1430,13 @@
+     def get_all_tasks(self):
+         all_tasks = []
+         for block in self.blocks:
++            # print(f'block {block.instance_name}')
+             all_tasks.extend(block.get_tasks_of_block())
++            # print(f'tasks {[task.name for task in all_tasks]}')
+             all_tasks = list(set(all_tasks))  # get rid of duplicates
+         return all_tasks
+ 
+-    def get_blocks_by_type(self, type_):
++    def get_blocks_by_type(self, type_:str) -> List[Block]:
+         return [block for block in self.blocks if block.type == type_]
+ 
+     # get all the blocks that hos the task
+@@ -1337,7 +1451,7 @@
+ 
+ 
+     # get all the blocks that hos the task
+-    def get_blocks_of_task(self, task):
++    def get_blocks_of_task(self, task:Task):
+         all_blocks = []
+         for block in self.blocks:
+             if task in block.get_tasks_of_block() :
+@@ -1345,6 +1459,13 @@
+ 
+         return all_blocks
+ 
++    def get_blocks_of_task_by_type(self, task:Task, block_type:str):
++        blocks = []
++        for block in self.blocks:
++            if block.type == block_type and task in block.get_tasks_of_block():
++                blocks.append(block)
++        return blocks
++
+     # this is just a number that helps us encode a design topology/block type
+     def set_config_code(self):
+         pes = str(sorted(['_'.join(blck.instance_name.split("_")[:-1]) for blck in self.get_blocks_by_type("pe")]))
+@@ -1359,6 +1480,39 @@
+     # this code (value) uniquely specifies a design.
+     # Usage: prevent regenerating/reevaluting the design for example.
+     def set_SOC_design_code(self):
++        if not config.DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++            self.set_SOC_design_code_FARSI()
++            return
++        # we don't care about task-to-PE mapping to determine SoC uniqueness UNLESS we are changing the scheduling policy on the fly, which we currently are not
++        # todo this is not a strict isomorphism check and can fail in corner cases
++        # 1. Equal number of vertices.
++        # 2. Equal number of edges.
++        # 3. Same degree sequence
++        # 4. Same number of circuit of particular length
++        # We are ignoring 4 and removing unique_id from node names
++        nx_graph = self.gen_nx_graph_repr()
++
++        #Update the HW graph NX
++        self.hw_graph_nx = self.gen_nx_graph_hw()
++
++        block_list_outdeg = []
++        for node in nx_graph.nodes:
++            block_list_outdeg.append(('_'.join(node.split('_')[:-1]), nx_graph.degree(node)))
++        sorted_block_list_outdeg = sorted(block_list_outdeg, key=lambda x: (x[0], x[1]))
++        new_list = []
++        for item in sorted_block_list_outdeg:
++            new_list.append(item[0] + ':' + str(item[1]))
++        sorted_block_list_outdeg = new_list
++        self.SOC_design_code = '__'.join(sorted_block_list_outdeg)
++        if not "A53" in self.SOC_design_code:
++            print("Error: A53 not in", self.SOC_design_code)
++            exit(1)
++
++    def set_SOC_design_code_FARSI(self):
++        
++        #Update the HW graph NX
++        self.hw_graph_nx = self.gen_nx_graph_hw()
++        
+         # sort based on the blk name and task names tuples
+         def sort_blk_tasks(blks):
+             blk_tasks = []
+@@ -1396,6 +1550,7 @@
+             blks_hosting_task_sorted = str(sorted(['_'.join(blk.instance_name.split("_")[:-1]) for blk in blks_hosting_task]))
+             self.SOC_design_code += tsk_name + "_" + blks_hosting_task_sorted + "___"
+         self.SOC_design_code += hg_string
++        # print(f"!! SOC_design_code set to: {self.SOC_design_code}")
+ 
+     # this is just a number that helps us encode a design topology/block type
+     def get_SOC_design_code(self):
+@@ -1455,29 +1610,38 @@
+         self.blocks = self.traverse_neighs_recursively(block_to_prime_with, [])
+         self.set_config_code()
+         self.set_SOC_design_code()
++        # if config.MEMOIZE_SHORTEST_PATHS:
++        #     self.gen_shortest_paths_all_combs()
+ 
+     # ---------------------------
+     # Functionality:
+     #       update the graph. Used for jitter modeling after a new task was sampled from the task distribution.
+     # --------------------------
+     def update_graph(self, block_to_prime_with=None):
+-        if not block_to_prime_with:
+-            block_to_prime_with = self.get_root()
+-        elif block_to_prime_with not in self.get_blocks():
+-            for blck in self.get_blocks():
+-                if blck.instance_name == block_to_prime_with.instance_name:
+-                    block_to_prime_with = blck
+-                    break
+-        self.prune_unnecessary_nodes(block_to_prime_with)
+-        self.blocks = self.traverse_neighs_recursively(block_to_prime_with, [])
+-        self.set_config_code()
+-        self.set_SOC_design_code()
+-        #self.assign_pipes() # rehuild pipes from scratch
+-        # re assigning pipes
++        if config.CONSTRAIN_TOPOLOGY:
++            self.update_graph_without_prunning(block_to_prime_with)
++        else:
++            if not block_to_prime_with:
++                block_to_prime_with = self.get_root()
++            elif block_to_prime_with not in self.get_blocks():
++                for blck in self.get_blocks():
++                    if blck.instance_name == block_to_prime_with.instance_name:
++                        block_to_prime_with = blck
++                        break
++            block_to_prime_with = self.prune_unnecessary_nodes(block_to_prime_with)
++            self.blocks = self.traverse_neighs_recursively(block_to_prime_with, [])
++            self.set_config_code()
++            self.set_SOC_design_code()
++            # if config.MEMOIZE_SHORTEST_PATHS:
++            #     self.gen_shortest_paths_all_combs()
++            #self.assign_pipes() # rehuild pipes from scratch
++            # re assigning pipes
+ 
+     # assign tasks to the pipes
+-    def task_the_pipes(self, task, pipes, dir):
++    def task_the_pipes(self, task, pipes:List[pipe], dir):
++        # print("!! tasking pipes")
+         for pipe_ in pipes:
++            # print(f"!! pipe master {pipe_.master.instance_name}, slave {pipe_.slave.instance_name}, dir {dir}")
+             if dir == "read":
+                 block = pipe_.get_slave()
+                 for parent in task.get_parents():  # [par.name for par in task.get_parents()]:
+@@ -1494,10 +1658,31 @@
+                         work = task.get_self_to_family_task_work(child)
+                         pipe_.update_traffic_and_dir(task, child, work, "write")
+ 
++    def untask_the_pipes(self, task, pipes: List[pipe], dir):
++        # print("!! tasking pipes")
++        for pipe_ in pipes:
++            # print(f"!! pipe master {pipe_.master.instance_name}, slave {pipe_.slave.instance_name}, dir {dir}")
++            if dir == "read":
++                block = pipe_.get_slave()
++                for parent in task.get_parents():  # [par.name for par in task.get_parents()]:
++                    parent_names = block.get_task_s_family_by_task_and_dir(task, "read")
++                    if parent.name in parent_names:
++                        work = parent.get_self_to_family_task_work(task)
++                        pipe_.remove_traffic_and_dir(parent, task, work, "read")
++
++            elif dir == "write":
++                block = pipe_.get_slave()
++                for child in task.get_children():
++                    children_names = block.get_task_s_family_by_task_and_dir(task, "write")
++                    if child.name in children_names:
++                        work = task.get_self_to_family_task_work(child)
++                        pipe_.remove_traffic_and_dir(task, child, work, "write")
++
++
+     def get_pipes_between_two_blocks(self, blck_1, blck_2, dir_):
+         pipes = []
+         # get blocks along the way
+-        master_to_slave_path = self.get_path_between_two_vertecies(blck_1, blck_2)
++        master_to_slave_path = self.get_path_between_two_vertices(blck_1, blck_2)
+         # get pipes along the way
+         for idx in range(0, len(master_to_slave_path) - 1):
+             block_master = master_to_slave_path[idx]
+@@ -1514,23 +1699,33 @@
+         for pipe in empty_pipes:
+             self.pipes.remove(pipe)
+ 
++    def get_blocks_of_task(self, task) -> List[Block]:
++        blocks = []
++        for block in self.blocks:
++            if task in block.get_tasks_of_block():
++                blocks.append(block)
++        return blocks
++
++    def get_mems_of_task(self, task) -> List[Block]:
++        blocks = []
++        for b in self.get_blocks_of_task(task):
++            if b.type == "mem":
++                blocks.append(b)
++        assert blocks
++        return blocks
++
+     # assign task to pipes
+     def task_all_the_pipes(self):
+-        def get_blocks_of_task(task):
+-            blocks = []
+-            for block in self.blocks:
+-                if task in block.get_tasks_of_block():
+-                    blocks.append(block)
+-            return blocks
+-
+-        # assign tasks to pipes
+         self.task_pipes = {}
+         all_tasks = self.get_all_tasks()
+         for task in all_tasks:
+-            pe = [block for block in get_blocks_of_task(task) if  block.type == "pe" ][0]
+-            mem_reads = [block for block in get_blocks_of_task(task) if  block.type == "mem"  and (task, "read") in block.get_tasks_dir_work_ratio().keys()]
+-            mem_writes = [block for block in get_blocks_of_task(task) if  block.type == "mem"  and (task, "write") in block.get_tasks_dir_work_ratio().keys()]
+-
++            # print(task.name, [block.instance_name for block in get_blocks_of_task(task)])
++            # print([block.type for block in get_blocks_of_task(task)])
++            # for block in get_blocks_of_task(task):
++            #     pprint(block.get_tasks_dir_work_ratio())
++            pe = [block for block in self.get_blocks_of_task(task) if  block.type == "pe" ][0]
++            mem_reads = [block for block in self.get_blocks_of_task(task) if  block.type == "mem"  and (task, "read") in block.get_tasks_dir_work_ratio().keys()]
++            mem_writes = [block for block in self.get_blocks_of_task(task) if  block.type == "mem"  and (task, "write") in block.get_tasks_dir_work_ratio().keys()]
+             # get all the paths leading from mem reads to pe
+             seen_pipes = []
+             for mem in mem_reads:
+@@ -1668,6 +1863,7 @@
+         pes = self.get_blocks_by_type("pe")
+         mems = self.get_blocks_by_type("mem")
+         ics = self.get_blocks_by_type("ic")
++        # print("@@", len(pes),len(mems),len(ics))
+         def seen_pipe(pipe__):
+             for pipe in self.pipes:
+                 if pipe__.master == pipe.master and pipe__.slave == pipe.slave and pipe__.dir == pipe.dir:
+@@ -1676,8 +1872,11 @@
+ 
+         # iterate through all the blocks and specify their pipes
+         for pe in pes:
++            # print(f"@@ pe {pe.instance_name}")
+             for mem  in mems:
+-                master_to_slave_path = self.get_path_between_two_vertecies(pe, mem)
++                # print(f"@@   mem {mem.instance_name}")
++                master_to_slave_path = self.get_path_between_two_vertices(pe, mem)
++                # print(f"@@   master_to_slave_path = {[b.instance_name for b in master_to_slave_path]}")
+                 if len(master_to_slave_path) > len(ics)+2: # two is for pe and memory
+                     print('something has gone wrong with the path calculation')
+                     exit(0)
+@@ -1690,6 +1889,7 @@
+                         if not seen_pipe(pipe_):
+                             self.pipes.append(pipe_)
+                             self.last_pipe_assigned_number +=1
++        assert self.pipes
+ 
+     def connect_pipes_to_blocks(self):
+         for pipe in self.pipes:
+@@ -1698,19 +1898,93 @@
+             master_block.set_pipe(pipe)
+             slave_block.set_pipe(pipe)
+ 
++    # unassign pipes to different blocks (depending on which blocks the pipes are connected to)
++    def unpipe_design_for_task(self, task:Task, blks:List[Block]):
++        # untask old pipes
++        pe = [block for block in blks if  block.type == "pe" ][0]
++        mem_reads = [block for block in blks if  block.type == "mem"  and (task, "read") in block.get_tasks_dir_work_ratio().keys()]
++        mem_writes = [block for block in blks if  block.type == "mem"  and (task, "write") in block.get_tasks_dir_work_ratio().keys()]
++        # get all the paths leading from mem reads to pe
++        seen_pipes = []
++        for mem in mem_reads:
++            pipes = self.get_pipes_between_two_blocks(pe, mem, "read")
++            pipes_to_consider = []
++            for pipe in pipes:
++                if pipe not in seen_pipes:
++                    pipes_to_consider.append(pipe)
++                    seen_pipes.append(pipe)
++            if len(pipes_to_consider) == 0:
++                continue
++            else:
++                self.untask_the_pipes(task, pipes_to_consider, "read")
++
++        # get all the paths leading from mem reads to pe
++        seen_pipes = []
++        for mem in mem_writes:
++            pipes = self.get_pipes_between_two_blocks(pe, mem, "write")
++            pipes_to_consider = []
++            for pipe in pipes:
++                if pipe not in seen_pipes:
++                    pipes_to_consider.append(pipe)
++                    seen_pipes.append(pipe)
++            if len(pipes_to_consider) == 0:
++                continue
++            else:
++                self.untask_the_pipes(task, pipes_to_consider, "write")
++
++    # assign pipes to different blocks (depending on which blocks the pipes are connected to)
++    def pipe_design_for_task(self, task:Task, blks:List[Block]):
++        # assign tasks to pipes
++        self.task_pipes = {}
++        pe = [block for block in blks if  block.type == "pe" ][0]
++        mem_reads = [block for block in blks if  block.type == "mem"  and (task, "read") in block.get_tasks_dir_work_ratio().keys()]
++        mem_writes = [block for block in blks if  block.type == "mem"  and (task, "write") in block.get_tasks_dir_work_ratio().keys()]
++        # get all the paths leading from mem reads to pe
++        seen_pipes = []
++        for mem in mem_reads:
++            pipes = self.get_pipes_between_two_blocks(pe, mem, "read")
++            pipes_to_consider = []
++            for pipe in pipes:
++                if pipe not in seen_pipes:
++                    pipes_to_consider.append(pipe)
++                    seen_pipes.append(pipe)
++            if len(pipes_to_consider) == 0:
++                continue
++            else:
++                self.task_the_pipes(task, pipes_to_consider, "read")
++
++        # get all the paths leading from mem reads to pe
++        seen_pipes = []
++        for mem in mem_writes:
++            pipes = self.get_pipes_between_two_blocks(pe, mem, "write")
++            pipes_to_consider = []
++            for pipe in pipes:
++                if pipe not in seen_pipes:
++                    pipes_to_consider.append(pipe)
++                    seen_pipes.append(pipe)
++            if len(pipes_to_consider) == 0:
++                continue
++            else:
++                self.task_the_pipes(task, pipes_to_consider, "write")
++
+     # assign pipes to different blocks (depending on which blocks the pipes are connected to)
+-    def pipe_design(self):
++    def pipe_design(self, task=None):
++        # print('@@ ~~~ pipe_design')
+         for block in self.blocks:
+             block.reset_pipes()
+             self.pipes = []
+             self.pipe_clusters = []
+ 
++        # re-memoize shortest paths if this option is enabled
++        if config.MEMOIZE_SHORTEST_PATHS:
++            self.gen_shortest_paths_all_combs()
+         # generate pipes everywhere
+         self.generate_pipes()
+         # assign tasks
+         self.task_all_the_pipes()
+         # filter pipes without tasks
+-        self.filter_empty_pipes()
++        if not config.USE_CUST_SCHED_POLICIES: # scheduler may not put tasks on all blocks, so those pipes must exist in case they're used later
++            self.filter_empty_pipes()
+         self.connect_pipes_to_blocks()
+         self.cluster_pipes()
+         self.size_queues()
+@@ -1725,9 +1999,8 @@
+     #       path: the accumulated path so far. At the end, this will contain the total path.
+     # --------------------------
+     def get_all_paths(self, vertex, v_des, vertecies_neigh_visited, path):
+-        paths = self.get_shortest_path_helper(vertex, v_des, vertecies_neigh_visited, path)
+-        #sorted_paths = sorted(paths, key=len)
+-        return paths
++        paths = nx.all_shortest_paths(self.hw_graph_nx,source=vertex,target=v_des)
++        return list(paths)
+ 
+ 
+     # ---------------------------
+@@ -1740,38 +2013,8 @@
+     #       path: the accumulated path so far. At the end, this will contain the total path.
+     # --------------------------
+     def get_shortest_path(self, vertex, v_des, vertecies_neigh_visited, path):
+-        paths = self.get_shortest_path_helper(vertex, v_des, vertecies_neigh_visited, path)
+-        sorted_paths = sorted(paths, key=len)
+-        return sorted_paths[0]
+-
+-    def get_shortest_path_helper(self, vertex, v_des, vertecies_neigh_visited, path):
+-        neighs = vertex.get_neighs()
+-        path.append(vertex)
+-
+-        # iterate through neighbours and remove the ones that you have already visited
+-        neighs_to_ignore = []
+-        for neigh in neighs:
+-            if (vertex,neigh) in vertecies_neigh_visited:
+-                neighs_to_ignore.append(neigh)
+-        neighs_to_look_at = list(set(neighs) - set(neighs_to_ignore))
+-
+-        if vertex == v_des:
+-            return [path]
+-        elif len(neighs_to_look_at) == 0:
+-            return []
+-        else:
+-            for neigh in neighs_to_look_at:
+-                vertecies_neigh_visited.append((neigh, vertex))
+-
+-            paths = []
+-            for vertex_ in neighs_to_look_at:
+-                paths_  = self.get_shortest_path_helper(vertex_, v_des, vertecies_neigh_visited[:], path[:])
+-                for path_ in paths_:
+-                    if len(path) == 0:
+-                        continue
+-                    paths.append(path_)
+-
+-            return paths
++        path_nx = nx.shortest_path(self.hw_graph_nx,source=vertex,target=v_des)
++        return path_nx
+ 
+ 
+     # ---------------------------
+@@ -1802,14 +2045,18 @@
+     #       v1: source vertex
+     #       v2: destination vertex
+     # --------------------------
+-    def get_path_between_two_vertecies(self, v1, v2):
++    def get_path_between_two_vertices(self, v1:Block, v2:Block) -> List[Block]:
+         #path = self.get_path_helper(v1, v2, [], [])
+         #if (len(path)) <= 0:
+         #    print("catch this error")
+         #assert(len(path) > 0), "no path between the two nodes"
+-        shortest_path = self.get_shortest_path(v1, v2, [],[])
+-        #if not shortest_path == path:
+-        #    print("something gone wrong with path calculation fix this")
++        if config.MEMOIZE_SHORTEST_PATHS:
++            assert config.CONSTRAIN_TOPOLOGY, "No point of memoizing shortest paths for non constrained topology"
++            assert (v1, v2) in self.shortest_paths, f"Error in memoized table: path between blocks {v1.instance_name} and {v2.instance_name} not found!"
++            shortest_path = self.shortest_paths[(v1, v2)]
++        else:
++            shortest_path = self.get_shortest_path(v1, v2, [],[])
++        # print(f"@@ shortest path b/w {v1.instance_name}->{v2.instance_name} = {[b.instance_name for b in shortest_path]}")
+         return shortest_path
+ 
+     # ---------------------------
+@@ -1823,9 +2070,6 @@
+         all_paths = self.get_all_paths(v1, v2, [],[])
+         return all_paths
+ 
+-
+-
+-
+     # ---------------------------
+     # Functionality:
+     #       get root of the hardware graph.
+@@ -1838,4 +2082,158 @@
+     #       get task's graph
+     # --------------------------
+     def get_task_graph(self):
+-        return self.task_graph
+\ No newline at end of file
++        return self.task_graph
++
++    def get_all_tasks_and_block_mappings(self):
++        # traverse
++        root_node = self.get_root()
++        root_node_name = '_'.join(root_node.instance_name.split('_')[:-2]+root_node.instance_name.split('_')[-1:])
++        q:List[Block] = [root_node]
++        visited_list:Set[str] = set([root_node_name])
++        tasks_of_block:Dict[str,List[str]] = {}
++        tasks_of_block[root_node_name] = set()
++        for t, dir in root_node.get_task_dirs_of_block():
++            if dir == "write":
++                for t_child in t.get_children():
++                    tasks_of_block[root_node_name].add(f"{t.name} -> {t_child.name}")
++            elif dir == "loop_back":
++                tasks_of_block[root_node_name].add(t.name)
++
++        while q:
++            node = q.pop(0)
++            node_name = '_'.join(node.instance_name.split('_')[:-2]+node.instance_name.split('_')[-1:])
++            for neigh in node.get_neighs():
++                neigh_name = '_'.join(neigh.instance_name.split('_')[:-2]+neigh.instance_name.split('_')[-1:])
++                if neigh_name not in visited_list:
++                    assert neigh_name not in tasks_of_block.keys()
++                    tasks_of_block[neigh_name] = set()
++                    for t, dir in neigh.get_task_dirs_of_block():
++                        if dir == "write":
++                            for t_child in t.get_children():
++                                tasks_of_block[neigh_name].add(f"{t.name} -> {t_child.name}")
++                        elif dir == "loop_back":
++                            tasks_of_block[neigh_name].add(t.name)
++
++                    visited_list.add(neigh_name)
++                    q.append(neigh)
++
++        # Set -> List.
++        for k, v in tasks_of_block.items():
++            tasks_of_block[k] = list(v)
++            # print(f"Final:tasks_of_block[{k}] = {v}")
++
++        return tasks_of_block
++
++    def gen_nx_graph_hw(self):
++        hw_nx_graph = nx.Graph()
++        
++        nodes_to_be_added = set()
++        edges_to_be_added = set()
++        # traverse
++        root_node = self.get_root()
++        # print(f"root_node = {root_node}")
++        q:List[Block] = [root_node]
++        visited_list:Set[Block] = set([root_node])
++        nodes_to_be_added.add(root_node)
++        while q:
++            node = q.pop(0)
++            for neigh in node.get_neighs():
++                edges_to_be_added.add((node, neigh))
++                if neigh not in visited_list:
++                    nodes_to_be_added.add(neigh)
++                    visited_list.add(neigh)
++                    q.append(neigh)
++
++        for n in nodes_to_be_added:
++            hw_nx_graph.add_node(n)
++        for e in edges_to_be_added:
++            hw_nx_graph.add_edge(e[0], e[1])
++            
++        # print(f"Nodes:{hw_nx_graph.nodes()}")
++        # print(f"Edges:{hw_nx_graph.edges()}")
++        return hw_nx_graph
++
++    def gen_nx_graph_repr(self):
++        hw_nx_graph = nx.Graph()
++        
++        nodes_to_be_added = set()
++        edges_to_be_added = set()
++        # traverse
++        root_node = self.get_root()
++        root_node_name = '_'.join(root_node.instance_name.split('_')[:-2]+root_node.instance_name.split('_')[-1:])
++        # print(f"root_node_name = {root_node_name}")
++        q:List[Block] = [root_node]
++        visited_list:Set[str] = set([root_node_name])
++        nodes_to_be_added.add(root_node_name)
++        # hw_nx_graph.add_node(root_node_name)
++        while q:
++            node = q.pop(0)
++            node_name = '_'.join(node.instance_name.split('_')[:-2]+node.instance_name.split('_')[-1:])
++            # print(f"Neighs of {node.instance_name} = {[n.instance_name for n in node.get_neighs()]}")
++            for neigh in node.get_neighs():
++                neigh_name = '_'.join(neigh.instance_name.split('_')[:-2]+neigh.instance_name.split('_')[-1:])
++                # print(f"neigh_name = {neigh_name}")
++                edges_to_be_added.add((node_name, neigh_name))
++                # print(f"Adding edge = {node_name}->{neigh_name}")
++                # hw_nx_graph.add_edge(node_name, neigh_name)
++                if neigh_name not in visited_list:
++                    nodes_to_be_added.add(neigh_name)
++                    # hw_nx_graph.add_node(neigh_name)
++                    # hw_nx_graph.add_edge(node_name, neigh_name)
++                    # print(f"Adding edge = {node_name}->{neigh_name}")
++                    visited_list.add(neigh_name)
++                    q.append(neigh)
++
++        for n in nodes_to_be_added:
++            hw_nx_graph.add_node(n, name=n)
++            # print(f"Adding edge = {node_name}->{neigh_name}")
++        for e in edges_to_be_added:
++            hw_nx_graph.add_edge(e[0], e[1])
++            # print(f"Adding edge = {e[0]}->{e[1]}")
++            
++        # print(f"Nodes:{hw_nx_graph.nodes()}")
++        # print(f"Edges:{hw_nx_graph.edges()}")
++        return hw_nx_graph
++
++    # ------------------------------
++    # Functionality:
++    #   write a csv file containing the hardware graph and task to hardware mapping
++    # ------------------------------
++    def export(self, hardware_graph_file:str, task_to_hw_map_file:str):
++        hw_nx_graph = self.gen_nx_graph_repr()
++
++        hw_amatrix = nx.adjacency_matrix(hw_nx_graph).todense()
++        nodes = list(hw_nx_graph.nodes())
++
++        # generate hardware graph file
++        with open(hardware_graph_file, 'w') as f:
++            f.write('Block Name,')
++            f.write(','.join(nodes))
++            f.write('\n')
++            for i, row in enumerate(hw_amatrix.tolist()):
++                f.write(f'{nodes[i]},')
++                f.write(','.join(['1' if el == 1 else '' for el in row]))
++                f.write('\n')
++
++        print(f"Wrote to file: {hardware_graph_file}")
++
++        tasks_of_block = self.get_all_tasks_and_block_mappings()
++
++        # Sanity check that no block remains unassigned, otherwise FARSI will complain.
++        # for k, v in tasks_of_block.items():
++        #     assert v, f"Block {k} has no task assigned to it!"
++
++        # Pad the dictionaries before converting to DataFrame and exporting to CSV.
++        max_len = 0
++        for _, v in tasks_of_block.items():
++            max_len = max(len(v), max_len)
++
++        for k, v in tasks_of_block.items():
++            len_to_pad = max_len - len(v)
++            if len_to_pad:
++                v.extend([''] * len_to_pad)
++
++        # generate task to hardware mapping file
++        df = pd.DataFrame.from_dict(tasks_of_block)
++        df.to_csv(task_to_hw_map_file, index=False)
++        print(f"Wrote to file: {task_to_hw_map_file}")

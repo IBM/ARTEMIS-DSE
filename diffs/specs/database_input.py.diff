@@ -1,0 +1,216 @@
+--- ./Project_FARSI_orig/specs/database_input.py
++++ ./Project_FARSI/specs/database_input.py
+@@ -6,13 +6,14 @@
+ from specs.parse_libraries.parse_library import  *
+ import importlib
+ from specs.gen_synthetic_data import *
+-
++# from pprint import pprint
++from typing import List, Tuple, Dict
+ 
+ #  -----------------
+ #   This class helps populating the database. It uses the sw_hw_database_population mode to do so.
+ #   the mode can be hardcoded, parse (parse a csv) or generate (synthetic generation)
+ #  -----------------
+-class database_input_class():
++class database_input_class:
+     def append_tasksL(self, tasksL_list):
+         # one tasks absorbs another one
+         def absorb(ref_task, task):
+@@ -54,8 +55,8 @@
+             if append:
+                 self.pe_mapsL.append(el)
+ 
+-    def append_pe_scheduels(self, pe_scheduels):
+-        for el in pe_scheduels:
++    def append_pe_schedules(self, pe_schedules):
++        for el in pe_schedules:
+             append = True
+             for el_ in self.pe_schedeulesL:
+                 if el_.task_name == el.task_name:
+@@ -64,13 +65,28 @@
+             if append:
+                 self.pe_schedeulesL.append(el)
+ 
+-
+-
++    def merge_maps(self, task_to_mappable_pe_wr_map:Dict[str, List[Tuple[str, float]]], task_is_accelrable_map:Dict[str, bool], pe_to_mappable_task_map:Dict[str, List[str]]) -> None:
++        '''Merges the three dictionaries `task_to_mappable_pe_wr_map`, `task_is_accelrable_map` and `pe_to_mappable_task_map`
++        into their respective class members.'''
++        for k, v in task_to_mappable_pe_wr_map.items():
++            if k in self.task_to_mappable_pe_wr_map:
++                self.task_to_mappable_pe_wr_map[k].extend(v)
++            else:
++                self.task_to_mappable_pe_wr_map[k] = v
++                
++        for k, v in task_is_accelrable_map.items():
++            if k not in self.task_is_accelrable_map:
++                self.task_is_accelrable_map[k] = v
++        for k, v in pe_to_mappable_task_map.items():
++            if k in self.pe_to_mappable_task_map:
++                self.pe_to_mappable_task_map[k].extend(v)
++            else:
++                self.pe_to_mappable_task_map[k] = v
+ 
+     #glass_constraints = {"power": config.budget_dict["glass"]["power"]}  #keys:power, area, latency  example: {"area": area_budget}
+     def __init__(self,
+                  sw_hw_database_population={"db_mode":"hardcoded", "hw_graph_mode":"generated_from_scratch",
+-                                            "workloads":{},"misc_knobs":{}}):
++                                            "workloads":{}, "workload_arr_times":None, "misc_knobs":{}}, result_folder=None):
+         # some sanity checks first
+         assert(sw_hw_database_population["db_mode"] in ["hardcoded", "generate", "parse"])
+         assert(sw_hw_database_population["hw_graph_mode"] in ["generated_from_scratch", "generated_from_check_point", "parse", "hardcoded", "hop_mode", "star_mode"])
+@@ -79,11 +95,13 @@
+ 
+         # start parsing/generating
+         if sw_hw_database_population["db_mode"] == "hardcoded":
++            assert sw_hw_database_population["workload_arr_times"] == None, "Staggered workload task graphs not supported in this mode"
+             lib_relative_addr = config.database_data_dir.replace(config.home_dir, "")
+             lib_relative_addr_pythony_fied = lib_relative_addr.replace("/",".")
+             files_to_import = [lib_relative_addr_pythony_fied+".hardcoded."+workload+".input"  for workload in sw_hw_database_population["workloads"]]
+             imported_databases = [importlib.import_module(el) for el in files_to_import]
+         elif sw_hw_database_population["db_mode"] == "generate":
++            assert sw_hw_database_population["workload_arr_times"] == None, "Staggered workload task graphs not supported in this mode"
+             lib_relative_addr = config.database_data_dir.replace(config.home_dir, "")
+             lib_relative_addr_pythony_fied = lib_relative_addr.replace("/",".")
+             files_to_import =   [lib_relative_addr_pythony_fied+".generate."+"input"  for workload in sw_hw_database_population["workloads"]]
+@@ -102,6 +120,11 @@
+         self.hoppy_task_names = []
+         self.hardware_graph = ""
+         self.task_to_hardware_mapping = ""
++        self.task_to_mappable_pe_wr_map:Dict[str, List[Tuple[str, float]]] = {}
++        self.task_is_accelrable_map:Dict[str, bool] = {}
++        self.pe_to_mappable_task_map:Dict[str, List[str]] = {}
++        self.workload_names = []
++        self.wrkld_arr_times = []
+         self.parallel_task_count = "NA"
+         self.serial_task_count = "NA"
+         self.memory_boundedness_ratio = "NA"
+@@ -133,24 +156,43 @@
+             self.sw_hw_database_population = sw_hw_database_population
+ 
+         elif sw_hw_database_population["db_mode"] == "parse":
+-            for workload in sw_hw_database_population["workloads"]:
+-                tasksL_, data_movement = gen_task_graph(os.path.join(config.database_data_dir, "parsing"), workload+"_database - ", sw_hw_database_population["misc_knobs"])
+-                blocksL_, pe_mapsL_, pe_schedulesL_ = gen_hardware_library(os.path.join(config.database_data_dir, "parsing"), workload+"_database - ", workload, sw_hw_database_population["misc_knobs"])
++
++            # root_dir = os.path.join(config.database_data_dir, "parsing/inputs")
++            # read file containing parent DAG arr times of each task
++            if config.STAGGERED_GRAPH_MODE:
++                # print(sw_hw_database_population["workloads"][-1])
++                assert isinstance(int(sw_hw_database_population["workloads"][-1].split('_')[-1]), int)
++                parent_dag_arr_times_file_name = config.FARSI_INP_DIR + "/" + '_'.join(sw_hw_database_population["workloads"][-1].split('_')[:-1]) + "_database - DAG Arr Times.csv"
++                assert os.path.exists(parent_dag_arr_times_file_name), f"{parent_dag_arr_times_file_name} doesn't exist"
++                df = pd.read_csv(parent_dag_arr_times_file_name)
++                wrkld_arr_times = pd.Series(df["Time (s)"].values,index=df["DAG ID"]).to_dict()
++            # print("@@ sw_hw_database_population.workload_arr_times", sw_hw_database_population["workload_arr_times"])
++            for i, workload in enumerate(sw_hw_database_population["workloads"]):
++                self.workload_names.append(workload)
++                self.wrkld_arr_times.append(wrkld_arr_times[i])
++                tasksL_, data_movement = gen_task_graph(config.FARSI_INP_DIR, i, self.wrkld_arr_times[i], workload+"_database - ", sw_hw_database_population["misc_knobs"])
++                blocksL_, pe_mapsL_, pe_schedulesL_, task_to_mappable_pe_wr_map, task_is_accelrable_map, pe_to_mappable_task_map = gen_hardware_library(config.FARSI_INP_DIR, workload+"_database - ", workload, sw_hw_database_population["misc_knobs"])
+                 self.sw_hw_database_population = sw_hw_database_population
+                 self.append_tasksL(copy.deepcopy(tasksL_))
+                 self.append_blocksL(copy.deepcopy(blocksL_))
+                 self.append_pe_mapsL(copy.deepcopy(pe_mapsL_))
+-                self.append_pe_scheduels(copy.deepcopy(pe_schedulesL_))
++                self.append_pe_schedules(copy.deepcopy(pe_schedulesL_))
+                 blah = data_movement
+                 self.souurce_memory_work.update(data_movement['souurce'])
+                 self.workload_tasks[workload] = [el.task_name for el in tasksL_]
+                 for el in tasksL_:
+                     self.task_workload[el.task_name] = workload
+ 
++                self.merge_maps(task_to_mappable_pe_wr_map, task_is_accelrable_map, pe_to_mappable_task_map)
++
+                 #self.souurce_memory_work += sum([sum(list(data_movement[task].values())) for task in data_movement.keys() if task == "souurce"])
+ 
+-            self.workloads_last_task = collect_last_task(sw_hw_database_population["workloads"], os.path.join(config.database_data_dir, "parsing"), "misc_database - ")
+-            self.budgets_dict, self.other_values_dict = collect_budgets(sw_hw_database_population["workloads"], sw_hw_database_population["misc_knobs"], os.path.join(config.database_data_dir, "parsing"),  "misc_database - ")
++            # create sorted self.task_to_mappable_pe_map from self.task_to_mappable_pe_wr_map based on descending order of work rate
++            for k in self.task_to_mappable_pe_wr_map.keys():
++                self.task_to_mappable_pe_wr_map[k].sort(key=lambda pe_name_wr_tup: pe_name_wr_tup[1], reverse=True)
++
++            self.workloads_last_task = collect_last_task(sw_hw_database_population["workloads"], config.FARSI_INP_DIR, "misc_database - ")
++            self.budgets_dict, self.other_values_dict = collect_budgets(sw_hw_database_population["workloads"], sw_hw_database_population["misc_knobs"], config.FARSI_INP_DIR,  "misc_database - ")
+             if config.heuristic_scaling_study:
+                 for metric in self.budgets_dict['glass'].keys():
+                     if metric == "latency":
+@@ -184,7 +226,11 @@
+ 
+ 
+             tasksL_, data_movement, task_work_dict, parallel_task_names, hoppy_task_names = generate_synthetic_task_graphs_for_asymetric_graphs(total_task_cnt, other_task_count, self.gen_config["parallel_task_cnt"], self.gen_config["serial_task_cnt"], self.parallel_task_type, intensity_params, self.num_of_NoCs)  # memory_intensive, comp_intensive
+-            blocksL_, pe_mapsL_, pe_schedulesL_ = generate_synthetic_hardware_library(task_work_dict, os.path.join(config.database_data_dir, "parsing"), "misc_database - Block Characteristics.csv")
++            if config.domain == "miniera" or config.domain == "arvr":
++                Block_char_file_name = f"misc_database - Block Characteristics.{config.domain}.csv"
++            else:
++                Block_char_file_name = f"misc_database - Block Characteristics.csv"
++            blocksL_, pe_mapsL_, pe_schedulesL_ = generate_synthetic_hardware_library(task_work_dict, config.FARSI_INP_DIR, Block_char_file_name)
+             self.tasksL.extend(tasksL_)
+             self.blocksL.extend(copy.deepcopy(blocksL_))
+             self.pe_mapsL.extend(pe_mapsL_)
+@@ -209,10 +255,21 @@
+ 
+         # get the hardware graph if need be
+         if sw_hw_database_population["hw_graph_mode"] == "parse":
+-            self.hardware_graph = gen_hardware_graph(os.path.join(config.database_data_dir, "parsing"),
+-                                                     workload + "_database - ")
+-            self.task_to_hardware_mapping = gen_task_to_hw_mapping(os.path.join(config.database_data_dir, "parsing"),
+-                                                            workload + "_database - ")
++            # first do a few sanity checks
++            assert isinstance(int(sw_hw_database_population["workloads"][0].split('_')[-1]), int)
++            assert isinstance(int(sw_hw_database_population["workloads"][0].split('_')[-2]), int)
++            assert sw_hw_database_population["workloads"][0].split('_')[-3] == "trace"
++            workload = '_'.join(sw_hw_database_population["workloads"][0].split('_')[:-3]) # remove "_trace_<traceId>_<dagId>"
++            # workload = '_'.join(sw_hw_database_population["workloads"][0].split('_')[:-1]) # remove "_<dagId>"
++            if config.CONSTRAIN_TOPOLOGY:
++                workload = '_'.join(workload.split('_')[:1] + ["soc", str(config.SOC_DIM[0])+"x"+str(config.SOC_DIM[1])] + workload.split('_')[1:]) # insert "_soc_AxB_"
++            if config.SINGLE_RUN == 2:
++                assert result_folder is not None
++                self.hardware_graph = gen_hardware_graph(result_folder + "/../../inputs", workload + "_database - ")
++                self.task_to_hardware_mapping = gen_task_to_hw_mapping(result_folder + "/../../inputs", workload + "_database - ")
++            else:
++                self.hardware_graph = gen_hardware_graph(config.FARSI_INP_DIR, workload + "_database - ")
++                self.task_to_hardware_mapping = gen_task_to_hw_mapping(config.FARSI_INP_DIR, workload + "_database - ")
+         else:
+             self.hardware_graph = ""
+             self.task_to_hardware_mapping = ""
+@@ -220,8 +277,10 @@
+         # set the budget values
+         config.souurce_memory_work  = self.souurce_memory_work
+         self.SOCsL = []
+-        self.SOCL0_budget_dict = {"latency": self.budgets_dict["glass"]["latency"], "area":self.budgets_dict["glass"]["area"],
+-                             "power": self.budgets_dict["glass"]["power"]}  #keys:power, area, latency  example: {"area": area_budget}
++        self.SOCL0_budget_dict = {}
++        for metric in config.budgetted_metrics:
++            self.SOCL0_budget_dict[metric] = self.budgets_dict["glass"][metric] # keys:power, area, latency  example: {"area": area_budget}
++        # pprint(self.SOCL0_budget_dict)
+ 
+         self.SOCL0_other_metrics_dict = {"cost": self.other_values_dict["glass"]["cost"]}
+         self.SOCL0 = SOCL("glass", self.SOCL0_budget_dict, self.SOCL0_other_metrics_dict)
+@@ -237,7 +296,7 @@
+         self.porting_effort["mem"] = .1
+         self.porting_effort["ic"] = .1
+ 
+-        df = pd.read_csv(os.path.join(config.database_data_dir, "parsing", "misc_database - Common Hardware.csv"))
++        df = pd.read_csv(os.path.join(config.database_data_dir, "parsing/inputs", "misc_database - Common Hardware.csv"))
+ 
+         # eval the expression
+         def evaluate(value):
+@@ -252,13 +311,13 @@
+         self.proj_name = config.proj_name
+         # simple models to FARSI_fy the database
+         self.misc_data["byte_error_margin"] = 100  # since we use work ratio, we might calculate the bytes wrong (this effect area calculation)
+-        self.misc_data["area_error_margin"] = 2.1739130434782608e-10
++        self.misc_data["area_error_margin"] = 1e-5
+             #self.misc_data["byte_error_margin"]/ self.misc_data["ref_mem_work_over_area"]  # to tolerate the error caused by work_ratio
+             #                                                                           # (use byte_error_margin for this calculation)
+ 
+-        arm_clock =[el.clock_freq for el in self.blocksL if el.block_subtype == "gpp"][0]
++        arm_clock = float([el.clock_freq for el in self.blocksL if el.block_subtype == "gpp"][0])
+         self.misc_data["arm_work_over_energy"] = self.misc_data["ref_gpp_dhrystone_value"]/self.misc_data["arm_power_over_clock"]
+-        self.misc_data["ref_gpp_work_rate"] = self.misc_data["arm_work_rate"] = self.misc_data["ref_gpp_dhrystone_value"] * arm_clock
++        self.misc_data["ref_gpp_work_rate"] = self.misc_data["ref_gpp_dhrystone_value"] * arm_clock
+         self.misc_data["dsp_work_rate"] = self.misc_data["dsp_speed_up_coef"] * self.misc_data["ref_gpp_work_rate"]
+         self.misc_data["ip_work_rate"] = self.misc_data["ip_speed_up_coef"]*self.misc_data["ref_gpp_work_rate"]
+         self.misc_data["dsp_work_over_energy"] = self.misc_data["dsp_speed_up_coef"] * self.misc_data["ref_gpp_dhrystone_value"] / self.misc_data["dsp_power_over_clock"]

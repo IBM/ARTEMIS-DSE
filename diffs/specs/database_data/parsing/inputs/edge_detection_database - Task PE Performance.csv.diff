@@ -1,0 +1,14 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/edge_detection_database - Task PE Performance.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/edge_detection_database - Task PE Performance.csv"
+@@ -0,0 +1,10 @@
++Task Name,A53,IP_gs,IP_le,IP_zc,IP_grad,IP_maxgrad,IP_rzc
++souurce,0,,,,,,
++gaussianSmoothing,1617100800,331284480,,,,,
++laplacianEstimate,421068800,,198574080,,,,
++computeZeroCrossings,437452800,,,198574080,,,
++computeGradient,427622400,,,,189071360,,
++computeMaxGradientLeaf,14749184,,,,,3301888,
++rejectZeroCrossings,376832000,,,,,,177602560
++dummy_last,0,,,,,,
++siink,0,,,,,,
+\ No newline at end of file

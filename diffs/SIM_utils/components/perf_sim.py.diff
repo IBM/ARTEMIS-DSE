@@ -1,0 +1,747 @@
+--- ./Project_FARSI_orig/SIM_utils/components/perf_sim.py
++++ ./Project_FARSI/SIM_utils/components/perf_sim.py
+@@ -3,49 +3,311 @@
+ #LICENSE file in the root directory of this source tree.
+ 
+ from design_utils.design import  *
+-from functools import reduce
+-
++from design_utils.des_handler import  *
++from specs.data_base import DataBase
++from copy import deepcopy
++import heapq
++import sys
++sys.path.append(os.path.abspath('../../../../artemis_core'))
++modules = [f[:-3] for f in os.listdir(os.path.abspath('../../../../artemis_core')) if f.endswith('.py') and f != '__init__.py']
++
++print("Modules in the directory:", modules)
++from importlib import import_module
++# from design_utils.components.scheduling import BaseSchedulingPolicy
+ 
+ # This class is the performance simulator of FARSI
+ class PerformanceSimulator:
+-    def __init__(self, sim_design):
++    def __init__(self, sim_design:SimDesignPoint, dh:DesignHandler, database:DataBase):
+         self.design = sim_design  # design to simulate
+-        self.scheduled_kernels = []   # kernels already scheduled
+-        self.driver_waiting_queue = []   # kernels whose trigger condition is met but can not run for various reasons
+-        self.completed_kernels_for_memory_sizing = []   # kernels already completed
++        self.dh = dh # design handler
++        self.scheduled_kernels:List[Kernel] = []   # kernels already scheduled
++        self.driver_waiting_queue:List[Kernel] = []   # kernels whose trigger condition is met but can not run for various reasons
++        self.completed_kernels_for_memory_sizing:List[Kernel] = []   # kernels already completed
+         # List of all the kernels that are not scheduled yet (to be launched)
+         self.yet_to_schedule_kernels = self.design.get_kernels()[:]  # kernels to be scheduled
++        self.num_wrklds = len(database.db_input.get_budget_dict("glass")["latency"])
++        self.last_tasks_for_wrkld = {}
++        self.dag_arr_times = None
++        self.children_of_souurce:Dict[Block, List[str]] = {}
++        self.souurce_s_mems:List[Block] = []
++        if config.STAGGERED_GRAPH_MODE:
++            self.dag_arr_times = deepcopy(database.db_input.wrkld_arr_times)
++            # sort by arrival time
++            heapq.heapify(self.dag_arr_times)
++            self.abs_deadlines_per_workload = {}
++            # extract absolute deadlines for each DAG or workload
++            for wrkld_name, deadline in database.db_input.get_budget_dict("glass")["latency"].items():
++                dag_id = int(wrkld_name.split('_')[-1])
++                self.abs_deadlines_per_workload[dag_id] = self.dag_arr_times[dag_id] + deadline
++                self.last_tasks_for_wrkld[dag_id] = database.db_input.workloads_last_task[wrkld_name]
++
++            #Set deadlines for individual kernels
++            for kernel in self.yet_to_schedule_kernels:
++                if config.CUST_SCHED_POLICY_NAME not in ["ms_dyn", "ms_dyn_energy"]:
++                    kernel.deadline = (self.abs_deadlines_per_workload[kernel.dag_id] - kernel.parent_graph_arr_time) * kernel.get_task().sdr
++                # else it is set dynamically during execution
++            # sort kernels by: 1. their parent DAG's arrival time, 2. the workload names
++            # not sorting leads to non-deterministic behavior across runs even with the same hardware graph and task-to-hardware mapping
++            self.yet_to_schedule_kernels = sorted(self.yet_to_schedule_kernels, key=lambda x: (x.parent_graph_arr_time, x.task_name))
++
++            # move siink to end since it has as its parents the last_task of each workload
++            siink_idx = None
++            for i, kernel in enumerate(self.yet_to_schedule_kernels):
++                if kernel.task_name == "siink":
++                    siink_idx = i
++            assert siink_idx is not None
++            self.yet_to_schedule_kernels.insert(-1, self.yet_to_schedule_kernels.pop(siink_idx))
+         self.all_kernels = self.yet_to_schedule_kernels[:]
++
++        self.task_name_to_task_dict:Dict[str,Task] = {}
++        for k in self.all_kernels:
++            self.task_name_to_task_dict[k.task_name] = k.task
++
++        for k in self.all_kernels:
++            k.min_time = self.get_best_case_estimated_latency(k)  # WCET
++            k.max_time = self.get_worst_case_estimated_latency(k) # BCET
++
++        self.task_to_mappable_pe_map = database.task_to_mappable_pe_map
+         self.task_token_queue = []
+-        self.old_clock_time = self.clock_time = 0
++        self.old_clock_time = self.clock_time = 0.
+         self.program_status = "idle"  # specifying the status of the program at the current tick
+         self.phase_num = -1
+         self.krnl_latency_if_run_in_isolation = {}
+-        self.serial_latency = 0
++        self.serial_latency = 0.
+         self.workload_time_if_each_kernel_run_serially()
+-        self.phase_interval_calc_time = 0
+-        self.phase_scheduling_time = 0
+-        self.task_update_time = 0
+-
++        self.bottleneck_stats_dict = {} # Map of phase number -> scheduled kernels -> stats of each scheduled kernel.
++        self.bottleneck_stats_dict[-1] = {}
++        self.phase_interval_calc_time = 0.
++        self.phase_scheduling_time = 0.
++        self.task_update_time = 0.
++
++        #Scheduling policy related variables
++        if config.USE_CUST_SCHED_POLICIES:
++            task_sched_policy_module = import_module('scheduling_policies.' + str(config.CUST_SCHED_POLICY_NAME))
++            self.task_sched_policy = task_sched_policy_module.SchedulingPolicy()
++        if config.SINGLE_RUN:
++            farsi_mode = "sim"
++        else:
++            farsi_mode = "exp"
++        
++        if config.USE_CUST_SCHED_POLICIES:
++            self.task_sched_policy.init(farsi_mode, self, self.design.get_hardware_graph(), self.task_to_mappable_pe_map,self.abs_deadlines_per_workload)
++
++        self.souurce_s_mem_work_dict = {}
++
++    def get_best_case_estimated_latency(self, kernel:Kernel) -> float:
++        if kernel.get_task().is_task_dummy():
++            return 0
++
++        assert kernel.blocks
++        assert kernel.kernel_total_work["execute"] != 0, f"Found total work for kernel {kernel.task_name} to be 0!"
++
++        # get block with fastest work rate for this task and calculate best case latency
++        max_wr, max_wr_pe = 0., None
++        for b in kernel.blocks:
++            # consider this block only if it is a PE and the task can run on it
++            if b.get_block_type_name() != "pe" or b.instance_name.split('_pe')[0] not in kernel.task_to_mappable_pe_map[kernel.get_task_name()]:
++                continue
++            b_wr = float(b.get_peak_work_rate())
++            if b_wr > max_wr:
++                max_wr = b_wr
++                max_wr_pe = b
++        if config.CUST_SCHED_CONSIDER_DM_TIME:
++            bcet = self.get_estimated_latency(kernel, max_wr_pe)
++        else:
++            bcet = kernel.kernel_total_work["execute"] / max_wr # in s
++            # print(f" @@ bcet lat of {kernel.task_name} on {max_wr_pe.instance_name} is {bcet}")
++        return bcet
++
++    def get_worst_case_estimated_latency(self, kernel:Kernel) -> float:
++        if kernel.get_task().is_task_dummy():
++            return 0
++
++        assert kernel.blocks
++        assert kernel.kernel_total_work["execute"] != 0
++
++        # get block with fastest work rate for this task and calculate worst case latency
++        min_wr, min_wr_pe = np.inf, None
++        for b in kernel.blocks:
++            # consider this block only if it is a PE and the task can run on it
++            if b.get_block_type_name() != "pe" or b.instance_name.split('_pe')[0] not in kernel.task_to_mappable_pe_map[kernel.get_task_name()]:
++                continue
++            b_wr = float(b.get_peak_work_rate())
++            if b_wr < min_wr:
++                min_wr = b_wr
++                min_wr_pe = b
++        if config.CUST_SCHED_CONSIDER_DM_TIME:
++            wcet = self.get_estimated_latency(kernel, min_wr_pe)
++        else:
++            wcet = kernel.kernel_total_work["execute"] / min_wr # in s
++            # print(f" @@ wcet lat of {kernel.task_name} on {min_wr_pe.instance_name} is {wcet}")
++        return wcet
+ 
+     def workload_time_if_each_kernel_run_serially(self):
+         self.serial_latency = 0
+         for krnl in self.yet_to_schedule_kernels:
+-            self.krnl_latency_if_run_in_isolation[krnl] = krnl.get_latency_if_krnel_run_in_isolation()
++            self.krnl_latency_if_run_in_isolation[krnl], _ = krnl.get_latency_if_krnel_run_in_isolation()
+ 
+         for krnl, latency in self.krnl_latency_if_run_in_isolation.items():
+             self.serial_latency += latency
+ 
++    # get the estimated latency of running kernel `kernel`'s task on block `pe_block`
++    # used at dynamic scheduling time to determine where to run the task
++    def get_estimated_latency(self, kernel:Kernel, pe_block:Block) -> float:
++        # if kernel.task_name == "VitPre_x1_3_5":
++        #     print(f"==================== get_estimated_latency for {kernel.task_name} on {pe_block.instance_name} ====================================")
++        assert config.sw_model == "gables_inspired_exact", "Other models not supported for estimated latency computation"
++        if not config.CUST_SCHED_CONSIDER_DM_TIME:
++            return kernel.get_comp_latency_if_krnel_run_in_isolation(pe_block)
++
++        # block's execute work rate
++        b_wr = float(pe_block.get_peak_work_rate())
++        # this is the maximum among read/write/execute latencies
++        execute_work = kernel.kernel_total_work["execute"]
++        lat = execute_work / b_wr # in s
++        # if kernel.task_name == "VitPre_x1_3_5":
++        #     print(f"\t*** Est Execute Lat for {kernel.task_name} on {pe_block.instance_name} = {lat}")
++
++        block_dir_workRatio_dict = kernel.get_task_to_blocks_map().block_dir_workRatio_dict
++
++        # find blocks that this kernel reads from and writes to
++        # collect self read writes works first; this will be dummily added into mem_subscribers in order to emulate "what if" memory traffic
++        temp_edges_to_remove:List[Tuple[Block,Tuple[str,str]]] = []
++        for block_dir, work_ratio_dict in block_dir_workRatio_dict.items():
++            block, dir_ = block_dir
++            # print(f"[LAT.EST.]     Block {block.instance_name}, dir {dir_}")
++            # if kernel.task_name == "VitPre_x1_3_5":
++            #     print(f"[LAT.EST.]     kernel {kernel.task_name} on block {block.instance_name}, dir {dir_}")
++            if block.type != "mem":
++                continue
++            assert work_ratio_dict
+ 
+-    def reset_perf_sim(self):
+-        self.scheduled_kernels = []
+-        self.completed_kernels_for_memory_sizing = []
+-        # List of all the kernels that are not scheduled yet (to be launched)
+-        self.yet_to_schedule_kernels = self.design.get_kernels()[:]
+-        self.old_clock_time = self.clock_time = 0
+-        self.program_status = "idle"  # specifying the status of the program at the current tick
+-        self.phase_num = -1
++            for family_task_name, work_ratio in work_ratio_dict.items():
++                task_to_mem_work = kernel.get_task().get_self_to_family_task_work(self.task_name_to_task_dict[family_task_name])
++                key = (kernel.task_name, family_task_name)
++                if key not in self.design.mem_subscribers[block]:
++                    temp_edges_to_remove.append((block, key))
++                    # if key in self.design.mem_subscribers[block]:
++                    #     print(f"ERROR {key} in self.design.mem_subscribers[{block.instance_name}]")
++                    #     pprint(self.design.mem_subscribers[block])
++                    #     assert False
++                    # print(f"\t\t[LAT.EST.]        Adding: self.design.mem_subscribers[{block.instance_name}][{key}] = {task_to_mem_work}")
++                    self.design.mem_subscribers[block][key] = task_to_mem_work
++
++        # now analyze
++        for block_dir, work_ratio_dict in block_dir_workRatio_dict.items():
++            block, dir_ = block_dir
++            if block.type != "mem":
++                continue
+ 
++            cur_work = 0
++            # iterate over all parents/children of this kernel's task
++            for family_task, work_ratio in work_ratio_dict.items():
++                cur_work += execute_work * work_ratio
++            #     if kernel.task_name == "VitPre_x1_3_5":
++            #         print(f"[LAT.EST.] kernel {kernel.task_name} on PE block {pe_block.instance_name} | family_task {family_task} : execute_work ({execute_work}) * work_ratio {work_ratio} = execute_work * work_ratio")
++            # if kernel.task_name == "VitPre_x1_3_5":
++            #     peak_wr = block.get_peak_work_rate()
++            #     print(f"[LAT.EST.] block {block.instance_name} peak wr = {peak_wr}, other subscribers =")
++            #     pprint(self.design.mem_subscribers[block])
++
++            # # estimated work rate if this kernel were to run on this block
++            mode = "equal_rate_per_pipe"
++            est_wr = self.get_est_work_rate_for_lat_est(mode, kernel, block, cur_work)
++            cur_lat = cur_work/est_wr
++            # if kernel.task_name == "VitPre_x1_3_5":
++            #     print(f"\t*** Est {dir_} Lat for {kernel.task_name} on {block.instance_name} = {cur_lat}")
++            lat = max(lat, cur_lat)
++
++            # we will update this only once to save on computation time
++            if config.DYN_SCHEDULING_MEM_REMAPPING and dir_ == "write":
++                children = list(work_ratio_dict.keys())
++                # print(f">>> Storing ({cur_work}, {cur_lat}, children)")
++                kernel.mem_write_lat_children_names[block] = (cur_work, cur_lat, children)
++
++        # delete self "what if" read writes
++        for block, key in temp_edges_to_remove:
++            del self.design.mem_subscribers[block][key]
++        del temp_edges_to_remove
++        # if kernel.task_name == "VitPre_x1_3_5":
++        #     print("==================== END OF get_estimated_latency ====================================")
++        return lat
++
++    def get_est_work_rate_for_lat_est(self, mode:str, kernel:Kernel, block:Block, write_work_for_block:float):
++        if write_work_for_block == 0:  # this scenario happens for souurce or siink or DummyLast
++            write_work_for_block = 1
++        peak_wr = block.get_peak_work_rate()
++        assert mode in ["equal_rate_per_kernel", "equal_rate_per_pipe"]
++        if mode == "equal_rate_per_kernel":
++            est_wr = peak_wr/(len(self.design.mem_subscribers[block].keys)+1)
++        elif mode == "equal_rate_per_pipe":
++            other_task_to_child_work = 0
++            for task_child_names_tup, task_to_child_work in self.design.mem_subscribers[block].items():
++                other_task_to_child_work += task_to_child_work
++            if other_task_to_child_work == 0: alloc_frac = 1.
++            else: alloc_frac = write_work_for_block/(write_work_for_block+other_task_to_child_work)
++            est_wr = peak_wr * alloc_frac
++            # if kernel.task_name == "VitPre_x1_3_5":
++            #     print(f"equal_rate_per_pipe alloc_frac = {alloc_frac} = write_work_for_block ({write_work_for_block}) / other_task_to_child_work ({other_task_to_child_work})")
++            #     print(f"est_wr = {est_wr} = peak_wr ({peak_wr}) * alloc_frac ({alloc_frac})")
++        return est_wr
++
++    # function to remap writes of this kernel to a memory that minimizes estimated latency of execution if this kernel is
++    # deemed to be bottlenecked by memory write time, based on estimation of traffic from other kernels
++    # all_mem_blocks: list of all memory blocks in the system that we can remap the writes of this kernel to
++    def remap_write_mems_for_lat_opt(self, kernel:Kernel, block:Block, all_mem_blocks:List[Block]) -> List[Tuple[str, Block, Block]]:
++        # print(f"remap_write_mems_for_lat_opt called for task {kernel.task_name}!")
++        assert config.CUST_SCHED_CONSIDER_DM_TIME, "Cannot call this function unless CUST_SCHED_CONSIDER_DM_TIME is set"
++        assert config.DYN_SCHEDULING_MEM_REMAPPING, "Cannot call this function unless DYN_SCHEDULING_MEM_REMAPPING is set"
++
++        # block's execute work rate
++        b_wr = float(block.get_peak_work_rate())
++        exec_lat = kernel.kernel_total_work["execute"] / b_wr # in s
++
++        # get all the read memories of this task
++        # we won't remap writes onto any of the read memories
++        # read_mems_of_task = self.get_kernel_s_mems("read")
++
++        write_mem_xchange_list = []
++        # if write latency is the bottleneck, try some other memory to write to
++        # iterate over all the write memories of this task and the corresponding list of write data movements
++        assert all_mem_blocks, f"No available memory blocks for task {kernel.task_name}"
++        assert kernel.mem_write_lat_children_names
++        for mem, cur_work_lat_children_names in kernel.mem_write_lat_children_names.items():
++            cur_work, cur_lat, children_names = cur_work_lat_children_names
++
++            for child_name in children_names:
++                # print(f"Task {kernel.task_name} exec lat {exec_lat}, write to {child_name} lat {cur_lat}")
++                best_pot_mem = mem
++                if config.DYN_SCHEDULING_MEM_REMAPPING_POL == "highest_mem_work_rate":
++                    if cur_lat >= exec_lat:
++                        # print(f"({mem.instance_name}) is the bottleneck!")
++                        max_mem_est_wr = 0.
++                        for pot_mem in all_mem_blocks:
++                            # estimated work rate if this kernel were to run on this block
++                            pot_mem_est_wr = self.get_est_work_rate_for_lat_est("equal_rate_per_pipe", kernel, pot_mem, cur_work)
++                            # update best memory migration candidate based on work rate (memory bandwidth)
++                            # print(f"(Checking pot_mem {pot_mem.instance_name})..., pot_mem_est_wr = {pot_mem_est_wr}")
++                            if pot_mem_est_wr > max_mem_est_wr:
++                                max_mem_est_wr = pot_mem_est_wr
++                                best_pot_mem = pot_mem
++                elif config.DYN_SCHEDULING_MEM_REMAPPING_POL == "lowest_mem_area":
++                    min_mem_area = np.inf
++                    for pot_mem in all_mem_blocks:
++                        pot_mem_area = pot_mem.get_latest_area_in_bytes()
++                        if pot_mem_area < min_mem_area:
++                            min_mem_area = pot_mem_area
++                            best_pot_mem = pot_mem
++                else: raise NotImplementedError
++
++                # print(f"best mem {best_pot_mem.instance_name}, cur mem {mem.instance_name}")
++                # skip original mem
++                if mem == best_pot_mem:
++                    continue
++                assert best_pot_mem is not None
++                # print(f"Appending entry ({child_name}, {mem.instance_name}, {best_pot_mem.instance_name})")
++                write_mem_xchange_list.append((child_name, mem, best_pot_mem))
++        return write_mem_xchange_list
+ 
+     # ------------------------------
+     # Functionality:
+@@ -70,7 +332,7 @@
+         for kernel in self.design.get_kernels()[:]:
+             if kernel.get_task() == task:
+                 return kernel
+-        raise Exception("kernel associated with task with name" + task.name + " is not found")
++        raise Exception("kernel associated with task with name " + task.name + " is not found, all kernels: " + str([k.task_name for k in self.design.get_kernels()]))
+ 
+     # ------------------------------
+     # Functionality:
+@@ -78,6 +340,7 @@
+     # ------------------------------
+     def next_kernel_to_be_completed_time(self):
+         comp_time_list = []  # contains completion time of the running kernels
++        assert self.scheduled_kernels
+         for kernel in self.scheduled_kernels:
+             comp_time_list.append(kernel.calc_kernel_completion_time())
+         return min(comp_time_list) + self.clock_time
+@@ -88,7 +351,7 @@
+     # Functionality:
+     #   all the dependencies of a kernel are done or no?
+     # ------------------------------
+-    def kernel_parents_all_done(self, kernel):
++    def kernel_parents_all_done(self, kernel:Kernel):
+         kernel_s_task = kernel.get_task()
+         parents_s_task = self.design.get_hardware_graph().get_task_graph().get_task_s_parents(kernel_s_task)
+         completed_tasks = [kernel.get_task() for kernel in self.completed_kernels_for_memory_sizing]
+@@ -98,7 +361,7 @@
+         return True
+     """
+ 
+-    def kernel_s_parents_done(self, krnl):
++    def kernel_s_parents_done(self, krnl:Kernel):
+         kernel_s_task = krnl.get_task()
+         parents_s_task = self.design.get_hardware_graph().get_task_graph().get_task_s_parents(kernel_s_task)
+         for parent in parents_s_task:
+@@ -107,26 +370,64 @@
+         return True
+ 
+ 
++    # ------------------------------
++    # Functionality:
++    #   Drop kernel if the parent DAGs deadline has passed
++    # ------------------------------
++    def drop_kernel_if_budget_not_met(self):
++        dag_id_to_drop = None
++        for k_id, kernel_ in enumerate(self.yet_to_schedule_kernels):
++            # this works because self.yet_to_schedule_kernels is sorted by DAG arrival time
++            if kernel_.parent_graph_arr_time > self.clock_time: # or kernel_.task_name in ["souurce", "siink"]:
++                break
++            # if DAG has surpassed deadline, do not schedule any more kernels of this DAG
++            if self.clock_time > self.abs_deadlines_per_workload[kernel_.dag_id] and not kernel_.is_dummy:
++                # print(f"self.yet_to_schedule_kernels = {[k.task_name for k in self.yet_to_schedule_kernels]}")
++                # print(f"Dropping task {kernel_.task_name} and other tasks in DAG {kernel_.dag_id} because curr time {self.clock_time} >= abs deadline {self.abs_deadlines_per_workload[kernel_.dag_id]}", flush=True)
++                dag_id_to_drop = kernel_.dag_id
++                break
++
++        # print(f"Before: {dag_id_to_drop}, self.yet_to_schedule_kernels = {[k.task_name for k in self.yet_to_schedule_kernels]}")
++        if dag_id_to_drop != None:
++            # truncate list of yet to schedule kernels to start from the index of the first task in the DAG to skip to
++            # print(f"yet_to_schedule_kernels = {[k.task_name for k in self.yet_to_schedule_kernels]}, dag_id_to_skip_to = {dag_id_to_skip_to}")
++            new_idx = None
++            for i, kernel_ in enumerate(self.yet_to_schedule_kernels):
++                if kernel_.dag_id != dag_id_to_drop: # when we have passed all the kernels belonging to dag_id_to_drop
++                    new_idx = i
++                    break
++                kernel_.dropped = True  # label these kernels as dropped
++                # print(f"--> Labeled {kernel_.task_name} as dropped")
++            # print(f"dag_id_to_skip_to = {dag_id_to_skip_to}, new_idx = {new_idx}")
++            if new_idx is not None:
++                self.yet_to_schedule_kernels = self.yet_to_schedule_kernels[new_idx:]
++            else:
++                self.yet_to_schedule_kernels = []
++        # print(f"After: self.yet_to_schedule_kernels = {[k.task_name for k in self.yet_to_schedule_kernels]}")
++
+     # launch: Every iteration, we launch the kernel, i.e,
+     # we set the operating state appropriately, and size the hardware accordingly
+-    def kernel_ready_to_be_launched(self, krnl):
++    def kernel_ready_to_be_launched(self, krnl:Kernel):
+         if self.kernel_s_parents_done(krnl) and krnl not in self.scheduled_kernels and not self.krnl_done_iterating(krnl):
++            if not krnl.arrived:
++                krnl.arrival_time = self.clock_time
++                krnl.arrived = True
+             return True
+         return False
+ 
+-    def kernel_ready_to_fire(self, krnl):
++    def kernel_ready_to_fire(self, krnl:Kernel):
+         if krnl.get_type() == "throughput_based" and krnl.throughput_time_trigger_achieved(self.clock_time):
+            return True
+         else:
+             return False
+ 
+-    def remove_parents_from_token_queue(self, krnl):
++    def remove_parents_from_token_queue(self, krnl:Kernel):
+         kernel_s_task = krnl.get_task()
+         parents_s_task = self.design.get_hardware_graph().get_task_graph().get_task_s_parents(kernel_s_task)
+         for parent in parents_s_task:
+             self.task_token_queue.remove((parent, kernel_s_task))
+ 
+-    def krnl_done_iterating(self, krnl):
++    def krnl_done_iterating(self, krnl:Kernel):
+         if krnl.iteration_ctr == -1 or krnl.iteration_ctr > 0:
+             return False
+         elif krnl.iteration_ctr == 0:
+@@ -164,65 +465,86 @@
+     #   Finds the kernels that are free to be scheduled (their parents are completed)
+     # ------------------------------
+     def schedule_kernels_token_based(self):
++        kernel_ready_queue = []
+         for krnl in self.all_kernels:
++            # this works because self.yet_to_schedule_kernels is sorted by DAG arrival time
++            if krnl.parent_graph_arr_time > self.clock_time:
++                break
+             if self.kernel_ready_to_be_launched(krnl):
+-                # launch: Every iteration, we launch the kernel, i.e,
+-                # we set the operating state appropriately, and size the hardware accordingly
+-                self.kernel_s_parents_done(krnl)
+-                self.remove_parents_from_token_queue(krnl)
+-                self.scheduled_kernels.append(krnl)
+-                if krnl in self.yet_to_schedule_kernels:
+-                    self.yet_to_schedule_kernels.remove(krnl)
+-
+-                # initialize #insts, tick, and kernel progress status
+-                krnl.launch(self.clock_time)
+-                # update PE's that host the kernel
+-                krnl.update_mem_size(1)
+-                krnl.update_pe_size()
+-                krnl.update_ic_size()
++                # set min_time, max_time and deadline params for the kernel
++                krnl.deadline = (self.abs_deadlines_per_workload[krnl.dag_id] - krnl.parent_graph_arr_time) * krnl.get_task().sdr
++                krnl.dag_dtime = (self.abs_deadlines_per_workload[krnl.dag_id])
++                kernel_ready_queue.append(krnl)
+             elif krnl.status == "in_progress"  and not krnl.get_task().is_task_dummy() and self.kernel_ready_to_fire(krnl):
+                 if krnl in self.scheduled_kernels:
+                     print("a throughput based kernel was scheduled before it met its desired throughput. "
+                           "This can cause issues in the models. Fix Later")
+-                self.scheduled_kernels.append(krnl)
++                kernel_ready_queue.append(krnl)
++
++        if config.USE_CUST_SCHED_POLICIES:
++            self.task_sched_policy.assign_kernel_to_block(self.clock_time, kernel_ready_queue, self.scheduled_kernels, self.yet_to_schedule_kernels)
++        else:
++            # print(f"@@ kernels_to_schedule = {[k.task_name for k in kernels_to_schedule]}")
++            for krnl in kernel_ready_queue:
++                # launch: Every iteration, we launch the kernel, i.e,
++                # we set the operating state appropriately, and size the hardware accordingly
++                self.launch_kernel(krnl)
+ 
+         # filter out kernels based on DMA serialization, i.e., only keep one kernel using the PE's driver.
+         if config.DMA_mode == "serialized_read_write":
+             self.scheduled_kernels, self.driver_waiting_queue = self.serialize_DMA()
+ 
+-    # ------------------------------
+-    # Functionality:
+-    #   Finds the kernels that are free to be scheduled (their parents are completed)
+-    # ------------------------------
+-    def schedule_kernels(self):
+-        if config.scheduling_policy == "FRFS":
+-            kernels_to_schedule = [kernel_ for kernel_ in self.yet_to_schedule_kernels
+-                                   if self.kernel_parents_all_done(kernel_)]
+-        elif config.scheduling_policy == "time_based":
+-            kernels_to_schedule = [kernel_ for kernel_ in self.yet_to_schedule_kernels
+-                                   if self.clock_time >= kernel_.get_schedule().starting_time]
++    def launch_kernel(self, krnl:Kernel):
++        if config.CUST_SCHED_CONSIDER_DM_TIME:
++            block_dir_workRatio_dict = krnl.get_task_to_blocks_map().block_dir_workRatio_dict
++            for block_dir, task_work_ratio in block_dir_workRatio_dict.items():
++                block, dir_ = block_dir
++                if block.type == "mem":
++                    if block not in self.design.mem_subscribers:
++                        self.design.mem_subscribers[block] = {}
++                    for family_task_name, _ in task_work_ratio.items():
++                        task_to_mem_work = krnl.get_task().get_self_to_family_task_work(self.task_name_to_task_dict[family_task_name])
++                        key = (krnl.task_name, family_task_name)
++                        assert key not in self.design.mem_subscribers[block]
++                        self.design.mem_subscribers[block][key] = task_to_mem_work
++                    # print(f"{self.clock_time} launch_kernel: {krnl.task_name}: ** self.design.mem_subscribers[{block.instance_name}] is now:")
++                    # pprint(self.design.mem_subscribers[block])
++
++        # self.kernel_s_parents_done(krnl)
++        self.remove_parents_from_token_queue(krnl)
++        self.scheduled_kernels.append(krnl)
++        if krnl in self.yet_to_schedule_kernels:
++            self.yet_to_schedule_kernels.remove(krnl)
++
++        # initialize #insts, tick, and kernel progress status
++        krnl.launch(self.clock_time)
++        # update PE's that host the kernel
++        if krnl.task_name != "souurce":
++            parents_of_krnl =  [parent.name for parent in krnl.get_task().get_parents()]
++            # print(f"?? parents of {krnl.task_name} = {parents_of_krnl}")
++            # if True, a the first tasks of a new DAG are starting, which read from souurce
++            if "souurce" in parents_of_krnl:
++                krnl.update_mem_size(1, "souurce", self.souurce_s_mems, krnl.dag_id, self.children_of_souurce, krnl.task_name)
++            krnl.update_mem_size(1, krnl.task_name, krnl.get_kernel_s_mems(dir="write"))
+         else:
+-            raise Exception("scheduling policy not supported")
+-
+-        for kernel in kernels_to_schedule:
+-            self.scheduled_kernels.append(kernel)
+-            self.yet_to_schedule_kernels.remove(kernel)
+-            # initialize #insts, tick, and kernel progress status
+-            kernel.launch(self.clock_time)
+-            # update memory size -> allocate memory regions on different mem blocks
+-            kernel.update_mem_size(1)
+-            # update pe allocation -> allocate a part of pe quantum for current task
+-            # (Hadi Note: allocation looks arbitrary and without any meaning though - just to know that something
+-            # is allocated or it is floating)
+-            kernel.update_pe_size()
+-            # empty function!
+-            kernel.update_ic_size()
++            assert not self.souurce_s_mem_work_dict
++            for m in krnl.get_kernel_s_mems(dir="write"):
++                self.souurce_s_mem_work_dict[m] = 0. # will update next
++            for i, mem in enumerate(self.souurce_s_mem_work_dict):
++                self.children_of_souurce[mem] = krnl.get_task_to_blocks_map().get_tasks_of_block_dir(mem.instance_name, "write")
++
++                # calculate work of each souurce write edge
++                mem_work_ratio_write = krnl.get_task_to_blocks_map().get_workRatio_by_block_name_and_dir(mem.instance_name, "write")
++                mem_work = krnl.get_total_work() * mem_work_ratio_write
++                self.souurce_s_mem_work_dict[m] = mem_work
+ 
++        krnl.update_pe_size()
++        krnl.update_ic_size()
+ 
+     def update_parallel_tasks(self):
+         # keep track of krnls that are present per phase
+         for krnl in self.scheduled_kernels:
+-            if krnl.get_task_name() in ["souurce", "siink", "dummy_last"]:
++            if krnl.get_task().is_task_dummy():
+                 continue
+             if krnl not in self.design.krnl_phase_present.keys():
+                 self.design.krnl_phase_present[krnl] = []
+@@ -255,23 +577,63 @@
+         scheduled_kernels = self.scheduled_kernels[:]
+         for kernel in scheduled_kernels:
+             if kernel.status == "completed":
++                # update counters for how many are reading/writing to each memory this phase
++                if config.CUST_SCHED_CONSIDER_DM_TIME:
++                    block_dir_workRatio_dict = kernel.get_task_to_blocks_map().block_dir_workRatio_dict
++                    for block_dir, task_work_ratio in block_dir_workRatio_dict.items():
++                        block, dir_ = block_dir
++                        if block.type == "mem":
++                            for family_task, _ in task_work_ratio.items():
++                                key = (kernel.task_name, family_task)
++                                del self.design.mem_subscribers[block][key]
++                            # print(f"{self.clock_time} update_scheduled_kernel_list: {kernel.task_name}: ** self.design.mem_subscribers[{block.instance_name}] is now:")
++                            # pprint(self.design.mem_subscribers[block])
++
+                 self.scheduled_kernels.remove(kernel)
+                 self.completed_kernels_for_memory_sizing.append(kernel)
+                 kernel.set_stats()
++                # self.pbar.update(1)
++
++                #set block as free
++                kernel.get_ref_block().busy = False
++                kernel.get_ref_block().kernel_running = None
++
++                # print(f"## {self.clock_time}: completed '{kernel.task_name}' on {kernel.get_ref_block().instance_name}")
++
+                 for child_task in kernel.get_task().get_children():
+                     self.task_token_queue.append((kernel.get_task(), child_task))
+                 # iterate though parents and check if for each parent, all the children are completed.
+                 # if so, retract the memory
+                 all_parent_kernels = [self.get_kernel_from_task(parent_task) for parent_task in
+                                       kernel.get_task().get_parents()]
++                completed_kernels_to_remove = set()
+                 for parent_kernel in all_parent_kernels:
+                     all_children_kernels = [self.get_kernel_from_task(child_task) for child_task in
+                                            parent_kernel.get_task().get_children()]
+ 
+-                    if all([child_kernel in self.completed_kernels_for_memory_sizing for child_kernel in all_children_kernels]):
+-                        parent_kernel.update_mem_size(-1)
++                    # if souurce is a parent of this task, we need to clear the memory that souurce should have cleared when this task completes
++                    # this is the only time we clear the read edge of a task
++                    if parent_kernel.get_task_name() == "souurce":
++                        coef = -1.; dir_ = "read" # we are subtracting data consumed by this kernel from souurce
++                        compl_krnl_mems = list(set(self.souurce_s_mem_work_dict.keys()) & set(kernel.get_kernel_s_mems(dir=dir_)))
++                        for mem in compl_krnl_mems:
++                            memory_total_work = self.souurce_s_mem_work_dict[mem]
++                            # changed to get by Hadi
++                            mem.update_area_in_bytes(coef*memory_total_work, kernel.task_name)
++                            mem.update_area(coef*memory_total_work/mem.get_work_over_area(kernel.get_power_knob_id()), kernel.task_name)
++
++                    all_completed = True
++                    for child_kernel in all_children_kernels:
++                        if child_kernel not in self.completed_kernels_for_memory_sizing:
++                            all_completed = False
++                    if all_completed:
++                        parent_kernel_s_mems = parent_kernel.get_kernel_s_mems(dir="write")
++                        parent_kernel.update_mem_size(-1, parent_kernel.task_name, parent_kernel_s_mems)
+                         for child_kernel in all_children_kernels:
+-                            self.completed_kernels_for_memory_sizing.remove(child_kernel)
++                            completed_kernels_to_remove.add(child_kernel)
++
++                for k in completed_kernels_to_remove:
++                    self.completed_kernels_for_memory_sizing.remove(k)
+ 
+             elif kernel.type == "throughput_based" and kernel.throughput_work_achieved():
+                 #del kernel.data_work_left_to_meet_throughput[kernel.operating_state][0]
+@@ -296,8 +658,14 @@
+     #   update the status of the program, i.e., whether it's done or still in progress
+     # ------------------------------
+     def update_program_status(self):
++
+         if len(self.scheduled_kernels) == 0 and len(self.yet_to_schedule_kernels) == 0:
+             self.program_status = "done"
++
++            # sanity checks that all memories are clear
++            for m in self.design.get_hardware_graph().get_blocks_of_type("mem"):
++                assert np.isclose(m.get_latest_area_in_bytes(), 0), f"Mem {m.instance_name} is not empty at the end of sim!"
++
+         elif len(self.scheduled_kernels) == 0:
+             self.program_status = "idle"  # nothing scheduled yet
+         elif len(self.yet_to_schedule_kernels) == 0:
+@@ -328,19 +696,35 @@
+     # ------------------------------
+     def calc_new_tick_position(self):
+         if config.scheduling_policy == "FRFS":
+-            new_clock_list = []
+-            if len(self.scheduled_kernels) > 0:
+-                new_clock_list.append(self.next_kernel_to_be_completed_time())
+-
+-            if self.any_throughput_based_kernel():
+-                trigger_time = self.next_throughput_trigger_time()
+-                if len(trigger_time) > 0:
+-                    new_clock_list.append(min(trigger_time))
+-
+-            if len(new_clock_list) == 0:
+-                return self.clock_time
++            if self.program_status == "idle" and self.clock_time != 0:
++                new_clock = np.inf
++                for kernel_ in self.yet_to_schedule_kernels:
++                    if self.kernel_s_parents_done(kernel_) and not kernel_.is_dummy:
++                        new_clock = min(new_clock, kernel_.parent_graph_arr_time)
++                assert new_clock != np.inf
++                # print(f"DEBUG jumped to new clock: {new_clock}")
++                return new_clock
+             else:
+-                return min(new_clock_list)
++                new_clock_list = []
++                if len(self.scheduled_kernels) > 0:
++                    next_kernel_to_be_completed_time = self.next_kernel_to_be_completed_time()
++                    new_clock_list.append(next_kernel_to_be_completed_time)
++
++                    # if there are no more DAGs remaining after this one, or if the next kernel completion time is sooner than the next DAG's arrival time
++                    if not self.dag_arr_times or next_kernel_to_be_completed_time < self.dag_arr_times[0]:
++                        new_clock_list.append(next_kernel_to_be_completed_time)
++                    else:
++                        new_clock_list.append(heapq.heappop(self.dag_arr_times))
++
++                if self.any_throughput_based_kernel():
++                    trigger_time = self.next_throughput_trigger_time()
++                    if len(trigger_time) > 0:
++                        new_clock_list.append(min(trigger_time))
++
++                if len(new_clock_list) == 0:
++                    return self.clock_time
++                else:
++                    return min(new_clock_list)
+             #new_clock = max(new_clock, min(throughput_achieved_time))
+         """
+         elif self.program_status == "in_progress":
+@@ -366,7 +750,10 @@
+     # ------------------------------
+     def update_kernels_kpi_for_next_tick(self, design):
+         # update each kernels's work-rate (bandwidth)
+-        _ = [kernel.update_block_att_work_rate(self.scheduled_kernels) for kernel in self.scheduled_kernels]
++        # print(f"self.scheduled_kernels = {[k.task_name for k in self.scheduled_kernels]}")
++        for kernel in self.scheduled_kernels:
++            # print(f"@@ Updating workrates for kernel {kernel.task_name} at phase {self.phase_num}")
++            self.bottleneck_stats_dict[self.phase_num][kernel.task_name] = kernel.update_block_att_work_rate(self.scheduled_kernels)
+         # update each pipe cluster's paths (inpipe-outpipe) work-rate
+ 
+         _ = [kernel.update_pipe_clusters_pathlet_work_rate() for kernel in self.scheduled_kernels]
+@@ -460,10 +847,11 @@
+ 
+         before_time = time.time()
+         self.update_scheduled_kernel_list()  # if a kernel is done, schedule it out
++        # print(f"yet_to_schedule_kernels = {[k.task_name for k in self.yet_to_schedule_kernels]}")
++        if config.DROP_TASKS_THAT_PASSED_DEADLINE:
++            self.drop_kernel_if_budget_not_met()
+         self.phase_scheduling_time += (time.time() - before_time)
+ 
+-        #self.schedule_kernels()  # schedule ready to be scheduled kernels
+-
+         self.schedule_kernels_token_based()
+         self.old_clock_time = self.clock_time  # update clock
+ 
+@@ -474,11 +862,13 @@
+         self.phase_interval_calc_time += (time.time() - before_time)
+ 
+         self.phase_num += 1
++        self.bottleneck_stats_dict[self.phase_num] = {}
+         self.update_parallel_tasks()
+ 
+         # return the new tick position
+         before_time = time.time()
+         new_tick_position = self.calc_new_tick_position()
++        assert isinstance(new_tick_position, float), "Invalid new_tick_position: " + str(new_tick_position)
+         self.phase_interval_calc_time += (time.time() - before_time)
+ 
+         return new_tick_position, self.program_status
+@@ -488,5 +878,6 @@
+     #   call the simulator
+     # ------------------------------
+     def simulate(self, clock_time):
++        assert isinstance(clock_time, float), "Invalid clock_time: " + str(clock_time)
+         self.tick(clock_time)
+-        return self.step()
+\ No newline at end of file
++        return self.step()

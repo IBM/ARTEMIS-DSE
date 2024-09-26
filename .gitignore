@@ -1,0 +1,18 @@
+Project_FARSI_orig
+# Project_FARSI
+generators/scripts/outputs/*
+generators/scripts/dot_outputs/*
+generators/scripts/scripts/results/*
+generators/scripts/logs/*
+generators/scripts/results/*
+generators/scripts/scripts/outputs/*
+generators/scripts/scripts/results*
+generators/scripts/scripts/local
+generators/scripts/scripts_arvr/results*
+generators/scripts/scripts_arvr/local
+diffs/cacti_for_FARSI
+diffs/data_collection/collection_utils/what_ifs/cmd.sh.diff
+diffs/data_collection/collection_utils/what_ifs/verification_result_file.csv.diff
+diffs/data_collection/data/latest_visualization/system_image.dot.diff
+*.pyc
+*.pyc.diff

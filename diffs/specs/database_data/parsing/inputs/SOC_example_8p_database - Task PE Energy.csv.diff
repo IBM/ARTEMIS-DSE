@@ -1,0 +1,14 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/SOC_example_8p_database - Task PE Energy.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/SOC_example_8p_database - Task PE Energy.csv"
+@@ -0,0 +1,11 @@
++Task Name,A53
++souurce,0
++participant0,
++participant1,
++participant2,
++participant3,
++participant4,
++participant5,
++participant6,
++participant7,
++siink,0

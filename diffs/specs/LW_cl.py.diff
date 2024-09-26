@@ -1,0 +1,50 @@
+--- ./Project_FARSI_orig/specs/LW_cl.py
++++ ./Project_FARSI/specs/LW_cl.py
+@@ -44,10 +44,14 @@
+ # light weight class that directory talks to the database. This is later used by the Task class which is much more
+ # involved.
+ class TaskL:  # task light weight
+-    def __init__(self, task_name: str, work: float, iteration=1, type = "latency_based", throughput_info = {}):
++    def __init__(self, task_name: str, work: float, iteration=1, type = "latency_based", throughput_info = {}, parent_graph_arr_time=None, dag_id=None, sr=None, sdr=None):
+         self.task_name = task_name
+         self.work = work   #  the amount of work associated with task (at the mement, this is expressed for PEs (as the
+                            # reference block). so work = number of instructions.
++        self.parent_graph_arr_time = parent_graph_arr_time  # the time at which the graph containing this task arrived
++        self.dag_id = dag_id  # the ID of this task's parent graph
++        self.sr = sr #Slack ratio
++        self.sdr = sdr #Sub-deadline ratio
+         self.__task_children = []  # dependent task.
+         self.__self_to_children_work = {}  # amount of byte that will be passed from this task to its children.
+         self.__self_task_work_distribution = [] # amount of work for this task as a distribution (for jitter modeling).
+@@ -198,27 +202,27 @@
+         for metric_name_, budget_value in self.budget_dict.items():
+             if metric_name_ == metric_name:
+                 return budget_value
+-        raise Exception("meteric:" + metric_name + " is not budgetted in the design")
++        raise Exception("metric:" + metric_name + " is not budgetted in the design")
+ 
+ 
+     def set_budget(self, metric_name, metric_value):
+         for metric_name_, _ in self.budget_dict.items():
+             if metric_name_ == metric_name:
+                 self.budget_dict[metric_name_]  = metric_value
+-        raise Exception("meteric:" + metric_name + " is not budgetted in the design")
++        raise Exception("metric:" + metric_name + " is not budgetted in the design")
+ 
+     def set_other_metrics_ideal_values(self, metric, value):
+         for metric_name_, _ in self.other_metrics_dict.items():
+             if metric_name_ == metric:
+                 self.other_metrics_dict[metric_name_] =  value
+                 return
+-        raise Exception("meteric:" + metric + " is not in other values in the design")
++        raise Exception("metric:" + metric + " is not in other values in the design")
+ 
+     def get_other_metrics_ideal_values(self, metric_name):
+         for metric_name_, ideal_value in self.other_metrics_dict.items():
+             if metric_name_ == metric_name:
+                 return ideal_value
+-        raise Exception("meteric:" + metric_name + " is not in other values in the design")
++        raise Exception("metric:" + metric_name + " is not in other values in the design")
+ 
+     # ------------------------------
+     # Functionality:

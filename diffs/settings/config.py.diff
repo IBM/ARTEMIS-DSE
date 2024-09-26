@@ -1,0 +1,279 @@
+--- ./Project_FARSI_orig/settings/config.py
++++ ./Project_FARSI/settings/config.py
+@@ -11,6 +11,18 @@
+ termination_mode = "workload_completion"  # when to terminate the exploration
+ assert termination_mode in ["workload_completion", "time_budget_reached"], "termination_mode:" +\
+                                                                            termination_mode + " not defined"
++
++def expand_workload_names(workload):
++    wrkld_name = workload.split('_')[0]
++    if wrkld_name == "miniera":
++        num_dags = int(workload.split("numDags_")[1].split("_")[0])
++    else:
++        raise NotImplementedError
++    workloads = [[]]
++    
++    for dag_id in range(num_dags):
++        workloads[0].append(f"{workload}_{dag_id}")
++    return workloads
+ # json inputs
+ design_input_folder = "model_utils/specs"
+ 
+@@ -85,11 +97,6 @@
+ objectives = ["latency"]  # [power, area, latency] are the options
+ #objective_function_type = "pareto"  # ["pareto", "weighted"] if weighted, we need to provide the weights
+ 
+-sorting_SOC_metric = "power"
+-all_metrics = ["latency",  "power", "area", "energy", "cost"]    # all the metrics for the evaluation of SOC
+-budgetted_metrics = ["latency",  "power", "area"]
+-other_metrics = ["cost"]
+-
+ budget_dict = {}
+ budget_dict["glass"] = {}
+ budget_dict["glass"]["power"] = .05
+@@ -116,15 +123,14 @@
+ metric_improvement_dir["cost"] = -1 # direction of improvement is reduction, and hence -1
+ move_s_krnel_selection = ["bottleneck"]   # options are :bottleneck, improvement_ease
+ 
++def sanity_check_metric_imprv_dir(metric_improvement_dir, all_metrics):
++    for metric in all_metrics:
++        if (metric not in metric_improvement_dir.keys()) or\
++                not(metric_improvement_dir[metric] == -1):  # is not a minimization problem
++                    print("---Error:can only support metrics that require minimization. You need to change the metric selection in"
++                        "navigation heuristic if you want otherwise in ")
++                    exit(0)
+ 
+-for metric in all_metrics:
+-    if (metric not in metric_improvement_dir.keys()) or\
+-            not(metric_improvement_dir[metric] == -1):  # is not a minimization problem
+-                print("---Error:can only support metrics that require minimization. You need to change the metric selection in"
+-                      "navigation heuristic if you want otherwise in ")
+-                exit(0)
+-
+-heuristic_type = "FARSI" # {moos, FARSI, SA}
+ moos_greedy_mode = "phv"
+ MOOS_GREEDY_CTR_RUN = 10
+ DESIGN_COLLECTED_PER_GREEDY = 20
+@@ -159,14 +165,14 @@
+ # DEBUGGING
+ # --------------------
+ NO_VIS = False # if set, no visualization is used. This speeds up everything
+-DEBUG_SANITY  = True # run sanity check on the design
++DEBUG_SANITY = True # run sanity check on the design
+ DEBUG_FIX = False  # non randomize the flow (by not touching the seed)
+ VIS_GR_PER_GEN =  False and not NO_VIS # visualize the graph per design point generation
+ VIS_SIM_PER_GEN = False and not NO_VIS # if true, we visualize the simulation progression
+-VIS_GR_PER_ITR =  True and not NO_VIS # visualize the graph exploration per iteration
++VIS_GR_PER_ITR =  False and not NO_VIS # visualize the graph exploration per iteration
+ VIS_PROFILE = True and not NO_VIS # visualize the profiling data
+-VIS_FINAL_RES = False and not NO_VIS # see the final results
+-VIS_ALL = False  and not NO_VIS # visualize everything
++VIS_FINAL_RES = True and not NO_VIS # see the final results
++VIS_ALL = False and not NO_VIS # visualize everything
+ REPORT = True  # report the stats (to the screen); draw plots.
+ DATA_DELIVEYRY = "absolute" #[obfuscate, absolute]"
+ DEBUG_MISC = False  # scenarios haven't covered above
+@@ -185,6 +191,8 @@
+ VIS_SIM_PROG = RUN_VERIFICATION_PER_GEN or RUN_VERIFICATION_PER_IMPROVMENT or RUN_VERIFICATION_PER_NEW_CONFIG  # visualize the simulation progression
+ 
+ verification_result_file = "verification_result_file.csv"
++BOTTLENECK_ANALYSIS = True
++bottleneck_stats_result_file = "phase_analysis"
+ # MOVES
+ 
+ FARSI_memory_consumption = "high"  # [low, high] if low is selected, we deactivate certain knobs to avoid using memory excessively
+@@ -199,7 +207,7 @@
+ regulate_move_tracking = (FARSI_memory_consumption == "low") # if true, we don't track and hence graph every move. This helps preventing memory pressure (and avoid getting killed by the OS)
+ #vis_move_trail_ctr_threshold = 20 # how often sample the moves (only applies if regulat_move_tracking enabled)
+ 
+-cache_seen_designs = False and not(FARSI_memory_consumption == "low") # if True, we cache the designs that we have seen. This way we wont simulate them unnecessarily.
++cache_seen_designs = True and not(FARSI_memory_consumption == "low") # if True, we cache the designs that we have seen. This way we wont simulate them unnecessarily.
+                           # This should be set to false if memory is an issue
+ 
+ VIS_MOVE_TRAIL = DEBUG_MOVE and not NO_VIS and False
+@@ -208,7 +216,7 @@
+ hw_sampling = {"mode":"exact", "population_size":1, "reduction":"avg"}   # mode:["error_integration", "exact"]  # error integration means that our IP library has an error and needs to be taken into account
+                                                # exact, means that (even if IP library has an error), treat the (most likely) value as accurate value
+ 
+-check_pointing_allowed = True
++check_pointing_allowed = False
+ check_point_list = ["ex", "db", "counters"] #choose from ["sim","ex", "db", "counters"]
+ 
+ 
+@@ -224,7 +232,7 @@
+ #if not sw_model == "gables_inspired":
+ #    dice_factor_list = [1]
+ 
+-if VIS_GR_PER_GEN: VIS_GR_PER_ITR = True
++if VIS_GR_PER_GEN: VIS_GR_PER_ITR = False
+ 
+ if VIS_ALL:
+     DEBUG = True; DEBUG_FIX = True; VIS_GR_PER_GEN = True; VIS_GR_PER_ITR = True; VIS_PROFILE = True
+@@ -246,11 +254,11 @@
+ 
+ 
+ DMA_mode = "serialized_read_write"  # [serialized_read_write, parallel_read_write]
+-#DMA_mode = "parallelized_read_write"  # [serialized_read_write, parallelized_read_write]
++# DMA_mode = "parallelized_read_write"  # [serialized_read_write, parallelized_read_write]
+ 
+ # power  collection period (how often to divide energy). it's measured in seconds
+ #PCP = .0001
+-PCP = .01
++PCP = .01 # None
+ 
+ budget_fitting_coeff = .9999 # used to make sure the slack values are uses in a way to bring the power and latency just beneath budget
+ 
+@@ -280,31 +288,31 @@
+ # CACTI
+ use_cacti = True and not RUN_VERIFICATION_AT_ALL # if True, use cacti. You have to have cacti installed.j
+ #use_cacti = True
+-cact_bin_addr = CC.cact_bin_addr
+-cacti_param_addr = CC.cacti_param_addr
+-cacti_data_log_file = CC.cacti_data_log_file
++cact_bin_addr = os.path.join(home_dir, CC.cact_bin_addr)
++cacti_param_addr = os.path.join(home_dir, CC.cacti_param_addr)
++cacti_data_log_file = os.path.join(home_dir, CC.cacti_data_log_file) # note that we add the workload domain name at the end
+ cacti_input_col_order = ["mem_subtype", "mem_size"]
+-cacti_output_col_order = ["read_energy_per_byte", "write_energy_per_byte", "area"]
++cacti_output_col_order = ["read_energy_per_byte", "write_energy_per_byte", "area", "leakage_power_per_byte"]
+ cacti_min_memory_size_in_bytes = 2048 # bellow this value cacti errors out. We can play with burst size and page size to fix this though
+ 
+ #ACC_coeff = 128  # comparing to what we have parsed, how much to modify. This is just for some exploration purposes
+ 	       # It should almost always set to 1
+ 
+-
+-transformation_selection_mode = "random"  # choose from {random, arch-aware}
++# TODO this is overwritten in FARSI_what_ifs_with_params.py
++transformation_selection_mode = "arch-aware"  # choose from {random, arch-aware}
+ 
+ all_available_transformations = ["migrate", "swap", "split", "split_swap"]#, "transfer", "routing"]
+ if RUN_VERIFICATION_AT_ALL:
+     all_available_transformations = ["migrate", "swap", "split", "split_swap"]
+ 
+-min_mem_size = {"sram": 256000, "dram":256000}
++min_mem_size = {"sram": 2_048, "dram":524_288} # DRAM reference https://users.cs.utah.edu/~rajeev/cs7960/notes/slides/19-7960-04-notes.pdf
+ 
+ dram_stacked = True
+ parallelism_analysis = "dynamic" # choose from ["dynamic", "static"]  # at the moment static is not working, something to do with the task and task sync
+                                  # and read to being present after unloading
+ 
+ 
+-heuristic_scaling_study = True
++heuristic_scaling_study = False
+ print_info_regularly = False
+ 
+ out_of_memory_percentage = 93
+@@ -318,3 +326,112 @@
+ 
+ 
+ memory_conscious = True
++
++# workloads = [["miniera"]]
++# workload_arr_times = [None]
++# # workloads = [["miniera", "hpvm_cava"]]
++# # workload_arr_times = [[[0.0, 0.05], [0.03]]]
++
++# workload = "miniera_soc_3x3_numDags_100_dagInterArrTime_0.035_ncv_1_nrad_2_nvit_8.0"
++# workload = "miniera_soc_3x3_numDags_3_dagInterArrTime_0.05_ncv_1_nrad_4_nvit_4.0"
++# workload = "miniera_soc_3x3_numDags_20_dagInterArrTime_0.05_ncv_1_nrad_2_nvit_4.0"
++# workload = "miniera_soc_3x0_numDags_1_dagInterArrTime_-1_ncv_1_nrad_1_nvit_1.0_trace_0">>>>>>> 3778e668a88f07b0cf3f4295cd94d489e0b45081
++
++# workload = "miniera_numDags_5_dagInterArrTime_0.05_ncv_1_nrad_1_nvit_1.0_trace_0"
++# workload = "audiodecoder_numDags_2_dagInterArrTime_0.05_trace_0"
++# workload = "hpvmcava_numDags_2_dagInterArrTime_0.05_trace_0"
++# workload = "hpvmcava_numDags_1_dagInterArrTime_-1_trace_0"
++# workload = "miniera_numDags_20_dagInterArrTime_0.0222_ncv_1_nrad_4_nvit_4.0_trace_0"
++# workload = "miniera_numDags_10_dagInterArrTime_0.02_ncv_1_nrad_1_nvit_1.0_trace_0"
++workload = "miniera_numDags_2_dagInterArrTime_0.0_ncv_1_nrad_4_nvit_4.0_trace_0"
++# workload = "audiodecoder_numDags_1_dagInterArrTime_-1_trace_0"
++# workload = "arvr_naudio_2_nhpvmcava_1_nedge_1_iataudio_0.021_iathpvmcava_0.034_iatedge_0.034_trace_0"
++# workload = "arvr_naudio_1_nhpvmcava_1_nedge_1_iataudio_0.021_iathpvmcava_0.034_iatedge_0.034_trace_0"
++soc_dim = (2,2)
++workloads = expand_workload_names(workload)
++# print(f"Workloads: {workloads}")
++
++FARSI_INP_DIR = f"{database_data_dir}/parsing/generators-for-FARSI/scripts/local"
++
++###### SET ME ########
++domain = "miniera"
++ADD_MAX_LLP_IP = True # False # add the IP with LLP=total num of loop iterations in the task
++MAX_SPAWN_IP = None # 11 # use None if you don't want a max limit
++
++PRINT_SCHEDULE              = 0
++STAGGERED_GRAPH_MODE        = 1    # set to true to run with staggered DAGs/workloads; this means that there must be a DAG Arr Times.csv file in specs/database_data/parsing corresponding to the workload
++CACHE_TASK_LAT_ESTIMATES    = 1 # optimization for scheduling time in case of custom scheduling policies
++
++LAT_AMP_FACTOR = 1e9 # None
++
++FREQ_RANGE = {"mem": [.2, .4, .8, 1.], "ip": [.2, .4, .8, 1.], "ic": [.2, .4, .8, 1.]} # todo mem scaling doesn't scale power, caution: don't scale > 1 otherwise we'll need to change SDR calculation in gen_parse_data.py
++# not used for SINGLE_RUN
++BUDGET_SCALES = {}
++
++BUDGET_SCALES["lat"]  = [1.] # DO NOT CHANGE LATENCY BUDGET HERE, do it in the launch script instead
++BUDGET_SCALES["pow"]  = [.1]
++BUDGET_SCALES["area"] = [.1]
++# ASSIGN_PENALTY_FOR_VARYING_WRKLD_LATS = False
++
++sorting_SOC_metric = "latency" # "power"
++all_metrics = ["latency", "power", "area", "energy", "cost"]    # all the metrics for the evaluation of SOC
++budgetted_metrics = ["latency", "power", "area"]
++other_metrics = ["cost"]
++sanity_check_metric_imprv_dir(metric_improvement_dir, all_metrics)
++
++SOC_DIM = None
++REGRESSION_RUNS                       = bool(int(os.environ.get('REGRESSION_RUNS', False)))
++# NOTE: these are passed to FARSI cmd line if REGRESSION_RUNS is False
++#       if REGRESSION_RUNS is True, these are handled in FARSI_what_ifs_with_params.py
++if not REGRESSION_RUNS:
++    heuristic_type                    = "FARSI" # {moos, FARSI, SA}
++    RT_AWARE_BLK_SEL                  = 1
++    RT_AWARE_TASK_SEL                 = 1
++    CLUSTER_KRNLS_NOT_TO_CONSIDER     = 1
++    CONSTRAIN_TOPOLOGY                = 0     # run in constrained topology mode where FARSI will not explore with moves that alter the network topology
++    DROP_TASKS_THAT_PASSED_DEADLINE   = 0     # drop any tasks that have passed their parent DAG's deadline
++    USE_CUST_SCHED_POLICIES           = True     # set to true to use scheduling policies that override FARSI's default FRFS policy
++    SINGLE_RUN                        = 0     # set to true if you want to run only single iteration with given hardware and mapping
++    OVERWRITE_INIT_SOC                = 0     # set to True to replace the init SoC hadware graph and mapping in specs/database_data/parsing with the best one explored by FARSI
++    DYN_SCHEDULING_INSTEAD_OF_MAPPING = 1     # set to True to use the scheduling policies instead of migrate moves during FARSI exploration
++    # NOTE: for regression runs, these are defined in FARSI_what_ifs_with_params.py
++    DYN_SCHEDULING_MEM_REMAPPING      = 0     # enable dynamic remapping of memory writes by the scheduler
++    CUST_SCHED_CONSIDER_DM_TIME       = 1     # set to consider estimated data movement time while figuring out where to schedule a task; may increase simulation time
++
++    if CONSTRAIN_TOPOLOGY:
++        HW_GRAPH_MODE                 = "parse"  # "generated_from_scratch"
++        SOC_DIM = soc_dim
++        # DO NOT MODIFY!
++        MEMOIZE_SHORTEST_PATHS = True  # save a dict of each pair of blocks in the design and their shortest paths
++    else:
++        HW_GRAPH_MODE                 = "generated_from_scratch" # "generated_from_scratch"
++        # DO NOT MODIFY!
++        MEMOIZE_SHORTEST_PATHS = False
++    if not DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++        cache_seen_designs            = False  # for FARSI, this seems to be slower than just simulation, because of deepcopy
++DYN_SCHEDULING_MEM_REMAPPING_POL = "highest_mem_work_rate" # "lowest_mem_area" # only used if DYN_SCHEDULING_MEM_REMAPPING is set
++        
++###### Done SET ME ########
++
++# make sure that cacti cfg files and cached data are pulled correctly based on the domain, as the SoC for each domain may be in different tech nodes
++cacti_data_log_file = '.'.join(cacti_data_log_file.split('.')[:-1] + [domain] + [cacti_data_log_file.split('.')[-1]])
++if domain == "miniera":
++    # 40nm->12nm (mem only scaling to match RTL blocks); power: 0.2*1.0× and area: 0.22*0.85× (Reagan et al. HPCA 2021 and https://www.anandtech.com/show/11854/globalfoundries-adds-12lp-process-tech-amd-first-customer)
++    # MUST MATCH WHAT'S THERE IN GENERATORS FOR FARSI
++    ENERGY_SCALE_F_MEM  = 0.2
++    ENERGY_SCALE_F_IP   = 1.
++    ENERGY_SCALE_F_IC   = 1.
++    ENERGY_SCALE_F_GPP  = 1.
++    AREA_SCALE_F_MEM    = 0.187
++    AREA_SCALE_F_IP     = 1.
++    AREA_SCALE_F_IC     = 1.
++    AREA_SCALE_F_GPP    = 1.
++else: # original parameters copied over from FARSI_what_ifs_with_params.py
++    ENERGY_SCALE_F_MEM  = 0.064
++    ENERGY_SCALE_F_IP   = 0.064
++    ENERGY_SCALE_F_IC   = 0.064
++    ENERGY_SCALE_F_GPP  = 1.
++    AREA_SCALE_F_MEM    = 0.07
++    AREA_SCALE_F_IP     = 0.0374
++    AREA_SCALE_F_IC     = 0.0374
++    AREA_SCALE_F_GPP    = 1.
+\ No newline at end of file

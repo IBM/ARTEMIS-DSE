@@ -1,9 +1,7 @@
 # MAINTAINERS
 
-Mo McElaney - mmcelaney@us.ibm.com
+Subhankar Pal - subhankar.pal@ibm.com
 
-JJ Asghar - jja@ibm.com
+Aporva Amarnath - aporva.amarnath@ibm.com
 
-Joe Sepi - joesepi@ibm.com
-
-Brad Topol - btopol@us.ibm.com
+Augusto Vega - ajvega@us.ibm.com

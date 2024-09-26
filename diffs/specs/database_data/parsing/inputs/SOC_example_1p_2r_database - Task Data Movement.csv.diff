@@ -1,0 +1,7 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/SOC_example_1p_2r_database - Task Data Movement.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/SOC_example_1p_2r_database - Task Data Movement.csv"
+@@ -0,0 +1,4 @@
++Task Name,source,participant0,siink
++souurce,,6400,
++participant0,,,6400
++siink,,,

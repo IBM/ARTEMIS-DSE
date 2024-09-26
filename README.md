@@ -1,77 +1,41 @@
-<!-- This should be the location of the title of the repository, normally the short name -->
-# repo-template
+# ARTEMIS: A Design Space Exploration Tool for Real-Time, Heterogeneous Systems-on-Chips
+ARTEMIS is a framework for the exploration of SoC configurations for real-time, heterogeneous systems. It is built upon a prior work called [FARSI](https://github.com/facebookresearch/Project_FARSI). ARTEMIS builds upon FARSI to perform task-to-hardware-block mapping using a set of real-time, heterogeneity-aware scheduling policies.
 
-<!-- Build Status, is a great thing to have at the top of your repository, it shows that you take your CI/CD as first class citizens -->
-<!-- [![Build Status](https://travis-ci.org/jjasghar/ibm-cloud-cli.svg?branch=master)](https://travis-ci.org/jjasghar/ibm-cloud-cli) -->
+## Infrastructure
+This repo is structured as follows. We clone `Project_FARSI` as a submodule and then apply several diff files that were developed as part of ARTEMIS into the cloned submodule directory.
+On the other hand, completely independent code, such as generators, scheduling policies, and block and task selection policies, are directly available in `artemis_core/`.
 
-<!-- Not always needed, but a scope helps the user understand in a short sentance like below, why this repo exists -->
-## Scope
+### Quick Setup
 
-The purpose of this project is to provide a template for new open source repositories.
-
-<!-- A more detailed Usage or detailed explaination of the repository here -->
-## Usage
-
-This repository contains some example best practices for open source repositories:
-
-* [LICENSE](LICENSE)
-* [README.md](README.md)
-* [CONTRIBUTING.md](CONTRIBUTING.md)
-* [MAINTAINERS.md](MAINTAINERS.md)
-<!-- A Changelog allows you to track major changes and things that happen, https://github.com/github-changelog-generator/github-changelog-generator can help automate the process -->
-* [CHANGELOG.md](CHANGELOG.md)
-
-> These are optional
-
-<!-- The following are OPTIONAL, but strongly suggested to have in your repository. -->
-* [dco.yml](.github/dco.yml) - This enables DCO bot for you, please take a look https://github.com/probot/dco for more details.
-* [travis.yml](.travis.yml) - This is a example `.travis.yml`, please take a look https://docs.travis-ci.com/user/tutorial/ for more details.
-
-These may be copied into a new or existing project to make it easier for developers not on a project team to collaborate.
-
-<!-- A notes section is useful for anything that isn't covered in the Usage or Scope. Like what we have below. -->
-## Notes
-
-**NOTE: While this boilerplate project uses the Apache 2.0 license, when
-establishing a new repo using this template, please use the
-license that was approved for your project.**
-
-**NOTE: This repository has been configured with the [DCO bot](https://github.com/probot/dco).
-When you set up a new repository that uses the Apache license, you should
-use the DCO to manage contributions. The DCO bot will help enforce that.
-Please contact one of the IBM GH Org stewards.**
-
-<!-- Questions can be useful but optional, this gives you a place to say, "This is how to contact this project maintainers or create PRs -->
-If you have any questions or issues you can create a new [issue here][issues].
-
-Pull requests are very welcome! Make sure your patches are well tested.
-Ideally create a topic branch for every separate change you make. For
-example:
-
-1. Fork the repo
-2. Create your feature branch (`git checkout -b my-new-feature`)
-3. Commit your changes (`git commit -am 'Added some feature'`)
-4. Push to the branch (`git push origin my-new-feature`)
-5. Create new Pull Request
-
-## License
-
-All source files must include a Copyright and License header. The SPDX license header is 
-preferred because it can be easily scanned.
-
-If you would like to see the detailed LICENSE click [here](LICENSE).
-
-```text
-#
-# Copyright IBM Corp. {Year project was created} - {Current Year}
-# SPDX-License-Identifier: Apache-2.0
-#
+This needs to be done only once.
+```bash
+git clone --recurse-submodules https://github.com/IBM/ARTEMIS-DSE.git && cd ARTEMIS-DSE
+./bootstrap.sh
 ```
-## Authors
 
-Optionally, you may include a list of authors, though this is redundant with the built-in
-GitHub list of contributors.
+### Contributing
 
-- Author: New OpenSource IBMer <new-opensource-ibmer@ibm.com>
+This needs to be done if you modify files inside `Project_FARSI/`.
+```bash
+./create_diffs.sh
+```
+Now, you can commit and push the files in `diffs/`.
 
-[issues]: https://github.com/IBM/repo-template/issues/new
+## ERA Reference Workload
+As a starting point, we demonstrate the use of ARTEMIS using the [ERA workload](https://github.com/IBM/mini-era). We provide a set of scripts in `generators/scripts`. These scripts are responsible for preparing the inputs to ARTEMIS. This demo considers a mesh configuration for the SoC and therefore uses a fixed-template mode.
+
+The main wrapper script that the user can directly invoke for this demo is called `run_launch.py`. The following blurb contains descriptions of some parameters settings specified within the script.
+
+First, these are the regression parameters to be able to run multiple simulations.
+* `soc_x_y_dag_iat_all`: Tuple of _x_ and _y_ dimensions of the mesh, and the DAG inter-arrival time in seconds.
+* `ncv_nrad_nvit_all`: Tuple of the number of CV, radar, and Viterbi decoding tasks, per DAG.
+
+Next, we have the environment variables that are defined and used in ARTEMIS.
+* `NDAGS_SIM`: Number of DAGs to consider for the simulated deplyoment of the SoC.
+* `N_EXP`: Number of DAGs to consider for exploration of the SoC.
+* `DROP_TASKS_THAT_PASSED_DEADLINE`: Whether to drop (1) or to complete (0) DAGs that have passed their deadline during simulation.
+* `BUDGET_SCALES`: Scaling factors to apply on top of the default budgets for latency, power, and area, respectively.
+* `CUST_SCHED_POLICY_NAME`: Name of the custom scheduling policy defined in `artemis_core/scheduling_policies`, e.g., "ms_dyn_energy"
+* `CONSTRAIN_TOPOLOGY`: Whether to run in fixed-template mode (1), or not (0).
+
+The remainder of the parameters can be left as-is for the demo.

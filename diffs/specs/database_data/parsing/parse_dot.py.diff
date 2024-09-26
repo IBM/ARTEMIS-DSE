@@ -1,0 +1,52 @@
+--- ./Project_FARSI_orig/specs/database_data/parsing/parse_dot.py
++++ ./Project_FARSI/specs/database_data/parsing/parse_dot.py
+@@ -0,0 +1,49 @@
++import pygraphviz as pgv
++import networkx as nx
++import sys
++import pandas as pd
++import os
++
++cfg = "csv" # "dot"
++ncvs  = [1]
++nrads = [1, 2, 4, 8]
++nvits = [1, 2, 4, 8]
++
++def get_pe_count(string, name):
++    pe_set = set()
++    for tok in string.split():
++        if name in tok:
++            tok = tok.split('(')[0].split('"')[1]
++            pe_set.add(tok) # int(tok.split(name)[0].split('_')[-2])
++    #         idx = max(cur_idx, idx)
++    return len(pe_set)
++
++if __name__ == "__main__":
++    assert sys.argv[1]
++    root = sys.argv[1]
++    print("N_Rad/N_Vit", end=',')
++    print(str(nvits).replace(' ', '')[1:-1])
++    for ncv in ncvs:
++        for nrad in nrads:
++            print(nrad, end=',')
++            for nvit in nvits:
++                path = f"{root}/ncv_{ncv}_nrad_{nrad}_nvit_{nvit}"
++                path += "/" + [d for d in os.listdir(path) if os.path.isdir(f"{path}/{d}")][0]
++                path += "/" + os.listdir(path)[0]
++                if cfg == "dot":
++                    with open(path + "/runs/0/system_image.dot", 'r') as f:
++                        lines = f.readlines()
++                        lines = [line.rstrip('\n') for line in lines]
++                        lines = ''.join(lines)
++                        ip_cnts = ""
++                        for ip in ['A53', 'IP_CV', 'IP_Radar', 'IP_Vit']:
++                            ip_cnt = get_pe_count(lines, ip)
++                            # print(ip, ip_cnt)
++                            ip_cnts += str(ip_cnt) + "_"
++                        ip_cnts = ip_cnts[:-1]
++                    print(ip_cnts, end=',')
++                elif cfg == "csv":
++                    df = pd.read_csv(path + "/runs/0/FARSI_simple_run_0_1.csv")
++                    print(float(df["latency"].tolist()[0].split('=')[1].split(';')[0]), end=',')
++            print('')
++            

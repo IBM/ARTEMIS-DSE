@@ -1,0 +1,14 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/edge_detection_database - Task Itr Count.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/edge_detection_database - Task Itr Count.csv"
+@@ -0,0 +1,10 @@
++Task Name,number of iterations
++souurce,1
++gaussianSmoothing,1638400
++laplacianEstimate,1638400
++computeZeroCrossings,1638400
++computeGradient,1638400
++computeMaxGradientLeaf,256
++rejectZeroCrossings,1638400
++dummy_last,1
++siink,1
+\ No newline at end of file

@@ -1,0 +1,15 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/hpvm_cava_database - Task PE Energy.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/hpvm_cava_database - Task PE Energy.csv"
+@@ -0,0 +1,11 @@
++Task Name,A53,IP_sc,IP_dm,IP_dn,IP_tr,IP_gm,IP_tm,IP_dsc
++souurce,0,,,,,,,
++scale_fxp_cloned,,26887000000.0,,,,,,
++demosaic_fxp_cloned,,,131069000000.0,,,,,
++denoise_fxp_cloned,,,,80897000000.0,,,,
++transform_fxp_cloned,,,,,72148000000.0,,,
++gamut_map_fxp_cloned,,,,,,208042000000.0,,
++tone_map_fxp_cloned,,,,,,,35786000000.0,
++descale_fxp_cloned,,,,,,,,27098000000.0
++dummy_last,0,,,,,,,
++siink,0,,,,,,,
+\ No newline at end of file

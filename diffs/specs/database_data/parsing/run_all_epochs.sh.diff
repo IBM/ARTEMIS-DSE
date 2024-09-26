@@ -1,0 +1,19 @@
+--- ./Project_FARSI_orig/specs/database_data/parsing/run_all_epochs.sh
++++ ./Project_FARSI/specs/database_data/parsing/run_all_epochs.sh
+@@ -0,0 +1,15 @@
++#!/bin/bash
++
++nc=1
++for nr in 1 2 4 8; do
++    for nv in 1 2 4 8; do
++        if [[ $nc -eq 1 ]] && [[ $nr -eq 1 ]] && [[ $nv -eq 1 ]]; then
++            continue
++        fi
++        python gen_parse_data_epochs.py --workload miniera -nc $nc -nv $nv -nr $nr --output-dot
++        cd ../../../data_collection/collection_utils/what_ifs
++        python FARSI_what_ifs_with_params.py $nc $nr $nv 2>&1 | tee logs/ncv_${nc}_nrad_${nr}_nvit_${nv}.log
++        cd -
++        mv dot_outputs/miniera_data_movement.opt.dot ../../../data_collection/data/simple_run/ncv_${nc}_nrad_${nr}_nvit_${nv}/
++    done
++done
+\ No newline at end of file

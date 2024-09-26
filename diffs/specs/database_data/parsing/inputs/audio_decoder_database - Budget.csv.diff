@@ -1,0 +1,7 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/audio_decoder_database - Budget.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/audio_decoder_database - Budget.csv"
+@@ -0,0 +1,3 @@
++Workload,latency,power,area,cost
++audio_decoder,0.021,,,
++all,,0.01,0.000003,0.000000001
+\ No newline at end of file

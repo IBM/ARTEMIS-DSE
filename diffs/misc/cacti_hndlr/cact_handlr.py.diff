@@ -1,0 +1,233 @@
+--- ./Project_FARSI_orig/misc/cacti_hndlr/cact_handlr.py
++++ ./Project_FARSI/misc/cacti_hndlr/cact_handlr.py
+@@ -2,21 +2,26 @@
+ #This source code is licensed under the MIT license found in the
+ #LICENSE file in the root directory of this source tree.
+ 
+-import os
+ import csv
+-import pandas as pd
+ import math
+-import numpy as np
+-import time
++import os
+ import shutil
+ import subprocess
++import time
++
++import numpy as np
++import pandas as pd
+ #from settings import config
++from filelock import FileLock
++
+ 
+ # This class at the moment only handls very specific cases,
+ # concretely, we can provide the size of memory and get the power/area results back.
+ class CactiHndlr():
+-    def __init__(self, bin_addr, param_file , cacti_data_log_file, input_col_order, output_col_order):
++    def __init__(self, bin_addr, param_file, cacti_data_log_file, input_col_order, output_col_order):
+         self.bin_addr = bin_addr
++        assert self.bin_addr, f"Binary {self.bin_addr} does not exist!"
++        self.pid = os.getpid()
+         self.param_file = param_file
+         self.cur_mem_size = 0
+         self.input_cfg = ""
+@@ -38,7 +43,7 @@
+         self.cur_mem_type = cur_mem_type
+ 
+     def set_params(self):
+-        param_file_copy_name= "/".join(self.param_file.split("/")[:-1]) + "/" + self.param_file.split("/")[-1] +"_cp"
++        param_file_copy_name= "/".join(self.param_file.split("/")[:-1]) + "/" + self.param_file.split("/")[-1] + "_cp" + f".{self.pid}" # add PID for uniqueness
+         #os.system("cp " + self.param_file + " "  + param_file_copy_name)
+         shutil.copy(self.param_file, param_file_copy_name)
+         time.sleep(.05)
+@@ -52,16 +57,20 @@
+         file1.close()
+ 
+         self.input_cfg = param_file_copy_name
+-        self.output_cfg = self.input_cfg +".out"
++        self.output_cfg = f"{self.input_cfg}.out"
+ 
+     def get_config(self):
+         return {"mem_size":self.cur_mem_size, "mem_type":self.cur_mem_type, "cell_type:":self.cur_cell_type}
+ 
+     def run_bin(self):
+         bin_dir = "/".join(self.bin_addr.split("/")[:-1])
+-        os.chdir(bin_dir)
+-        #cmd = self.bin_addr + " " + "-infile " + self.input_cfg
+-        subprocess.call([self.bin_addr, "-infile", self.input_cfg])
++        cmd = self.bin_addr + " " + "-infile " + self.input_cfg
++        process = subprocess.Popen(cmd,
++            shell=True,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.STDOUT,
++            cwd=bin_dir)
++        process.wait()
+         #os.system(cmd)
+ 
+     def run_cacti(self):
+@@ -78,28 +87,32 @@
+         while not os.path.isfile(self.output_cfg) and ctr < 60:
+             time.sleep(1)
+             ctr +=1
+-
+-        f = open(self.output_cfg)
+-        reader = csv.DictReader(f)
+-        dict_list = []
+-        for line in reader:
+-            dict_list.append(line)
+-
++        df = pd.read_csv(self.output_cfg)
++        assert len(df.index) == 1
+         for kw in kwords:
+-            results_dict [kw] = []
++            results_dict[kw] = df[' ' + kw].values[0]
+ 
+-        for dict_ in dict_list:
+-            for kw in results_dict.keys():
+-                for key in dict_.keys():
+-                    if key == " " +kw:
+-                        results_dict[kw] = dict_[key]
++        # f = open(self.output_cfg)
++        # reader = csv.DictReader(f)
++        # dict_list = []
++        # for line in reader:
++        #     dict_list.append(line)
++
++        # for kw in kwords:
++        #     results_dict [kw] = []
++
++        # for dict_ in dict_list:
++        #     for kw in results_dict.keys():
++        #         for key in dict_.keys():
++        #             if key == " " +kw:
++        #                 results_dict[kw] = dict_[key]
+ 
+-        f.close()
++        # f.close()
+         return results_dict
+ 
+     def collect_cati_data(self):
+         self.run_cacti()
+-        results = self.parse_and_find(["Dynamic read energy (nJ)", "Dynamic write energy (nJ)", "Area (mm2)"])
++        results = self.parse_and_find(["Dynamic read energy (nJ)", "Dynamic write energy (nJ)", "Area (mm2)", "Standby leakage per bank(mW)", "Number of banks", "Capacity (bytes)"])
+         os.system("rm " + self.output_cfg)
+         return results
+ 
+@@ -110,38 +123,44 @@
+         self.cached_data_file_addr = cached_data_file_addr
+         self.input_col_order = input_col_order
+         self.output_col_order = output_col_order
+-        self.prase_cached_data()
++        self.parse_cached_data()
+ 
+-    def prase_cached_data(self):
++    def parse_cached_data(self):
+         # create the file if doesn't exist
+-        if not os.path.exists(self.cached_data_file_addr):
+-            file = open(self.cached_data_file_addr, "w")
+-            for col_val in (self.input_col_order + self.output_col_order)[:-1]:
+-                file.write(str(col_val)+ ",")
+-            file.write(str((self.input_col_order + self.output_col_order)[-1])+"\n")
+-            file.close()
++        lock_filename = self.cached_data_file_addr.replace(".csv", ".lock")
++        with FileLock(lock_filename):
++            if not os.path.exists(self.cached_data_file_addr):
++                file = open(self.cached_data_file_addr, "w")
++                for col_val in (self.input_col_order + self.output_col_order)[:-1]:
++                    file.write(str(col_val)+ ",")
++                file.write(str((self.input_col_order + self.output_col_order)[-1])+"\n")
++                file.close()
+ 
+         # populate the pand data frames with it
+         try:
++            # print(f"Reading file: {self.cached_data_file_addr}")
+             self.df = pd.read_csv(self.cached_data_file_addr)
+         except Exception as e:
+             if e.__class__.__name__ in "pandas.errors.EmptyDataError":
+                 self.df = pd.DataFrame(columns=self.input_col_order + self.output_col_order)
+                 #self.df =
++            else:
++                print(e)
++                exit(1)
+ 
+     def find(self, KVs):
+         df_ = self.df
+         for k,v in KVs:
+             df_temp = self.find_one_kv(df_, (k,v))
+             if isinstance(df_temp, bool)  and df_temp == False:  # if can't be found
+-                return False, "_", "_", "_"
++                return False, "_", "_", "_", "_"
+             elif df_temp.empty:
+-                return False, "_", "_", "_"
++                return False, "_", "_", "_", "_"
+             df_ =  df_temp
+ 
+-        if len(df_.index) > 1:  # number of rows >1 means more than one equal value
+-            print("can not have duplicated values ")
+-            exit(0)
++        # if len(df_.index) > 1:  # number of rows >1 means more than one equal value
++        #     print("can not have duplicated values ")
++        #     exit(1)
+ 
+         output = [True] + [df_.iloc[0][col_name] for col_name in self.output_col_order]
+         return output
+@@ -163,35 +182,36 @@
+ 
+         # append the output file
+         # make the output file if doesn't exist
+-        if not os.path.exists(self.cached_data_file_addr):
+-            file = open(self.cached_data_file_addr, "w")
+-            for col_val in self.df.columns[:-1]:
+-                file.write(self.df.columns + ",")
+-            file.write(self.df.columns[-1]+  "\n")
+-            file.close()
+-
+-        values_ = [kv[1] for kv in key_values_]
+-        # add it to the pandas
+-        df2 = pd.DataFrame([values_], columns=self.input_col_order + self.output_col_order)
+-        self.df = self.df.append(df2, ignore_index=True)
+-
+-        # append results to the file
+-        with open(self.cached_data_file_addr, "a") as output:
+-            for key, value in key_values_[:-1]:
+-                output.write(str(value) +",")
+-            output.write(str(values_[-1]) + "\n")
+-
++        lock_filename = self.cached_data_file_addr.replace(".csv", ".lock")
++        with FileLock(lock_filename):
++            if not os.path.exists(self.cached_data_file_addr):
++                file = open(self.cached_data_file_addr, "w")
++                for col_val in self.df.columns[:-1]:
++                    file.write(self.df.columns + ",")
++                file.write(self.df.columns[-1]+  "\n")
++                file.close()
++
++            values_ = [kv[1] for kv in key_values_]
++            # add it to the pandas
++            df2 = pd.DataFrame([values_], columns=self.input_col_order + self.output_col_order)
++            self.df = self.df.append(df2, ignore_index=True)
++
++            # append results to the file
++            with open(self.cached_data_file_addr, "a") as output:
++                for key, value in key_values_[:-1]:
++                    output.write(str(value) +",")
++                output.write(str(values_[-1]) + "\n")
+ 
+ # just a test case
+ if __name__ == "__main__":
+-    cact_bin_addr = "/Users/behzadboro/Downloads/cacti/cacti"
+-    cacti_param_addr = "/Users/behzadboro/Downloads/cacti/farsi_gen.cfg"
+-    cacti_data_log_file= "/Users/behzadboro/Downloads/cacti/data_log.csv"
++    cact_bin_addr = "/dccstor/epochs/aporvaa/Project_FARSI_Sched/cacti_for_FARSI/cacti"
++    cacti_param_addr = "/dccstor/epochs/aporvaa/Project_FARSI_Sched/cacti_for_FARSI/farsi_gen.cfg"
++    cacti_data_log_file= "/dccstor/epochs/aporvaa/Project_FARSI_Sched/cacti_for_FARSI/data_log.csv"
+ 
+     cur_mem_size = 320000000
+     cur_mem_type = "main memory"   # ["main memory", "ram"]
+     input_col_order = ("mem_subtype", "mem_size")
+-    output_col_order = ("energy_per_byte", "area")
++    output_col_order = ("read_energy_per_byte", "write_energy_per_byte", "area", "leakage_power_per_byte")
+     cacti_hndlr = CactiHndlr(cact_bin_addr, cacti_param_addr, cacti_data_log_file, input_col_order, output_col_order)
+     cacti_hndlr.set_cur_mem_size(cur_mem_size)
+     cacti_hndlr.set_cur_mem_type(cur_mem_type)

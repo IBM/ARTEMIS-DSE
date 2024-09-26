@@ -1,0 +1,425 @@
+--- ./Project_FARSI_orig/data_collection/collection_utils/what_ifs/FARSI_what_ifs_with_params.py
++++ ./Project_FARSI/data_collection/collection_utils/what_ifs/FARSI_what_ifs_with_params.py
+@@ -1,21 +1,28 @@
++#!/usr/bin/env python3
+ #Copyright (c) Facebook, Inc. and its affiliates.
+ #This source code is licensed under the MIT license found in the
+ #LICENSE file in the root directory of this source tree.
+ 
+-import sys
++import pandas as pd
++import math
++import itertools
++import glob
++import time
+ import os
++import sys
++import numpy as np
+ import shutil
+ import multiprocessing
+-import psutil
+ sys.path.append(os.path.abspath('./../'))
+ import home_settings
++print("Importing top.main_FARSI.", flush=True)
+ from top.main_FARSI import run_FARSI
+-from top.main_FARSI import run_FARSI
++print("Imported top.main_FARSI.", flush=True)
+ from settings import config
+ import os
++import os.path
+ import itertools
+ # main function
+-import numpy as np
+ from mpl_toolkits.mplot3d import Axes3D
+ from matplotlib import cm
+ import matplotlib.pyplot as plt
+@@ -23,16 +30,17 @@
+ import numpy as np
+ from specs.LW_cl import *
+ from specs.database_input import  *
+-import math
+ import matplotlib.colors as colors
+-#import pandas
+-import matplotlib.colors as mcolors
+-import pandas as pd
+-import argparse, sys
++
+ from FARSI_what_ifs import *
+-import os.path
+ 
++from visualization_utils.vis_hardware import *
++
++print("Imports loaded.", flush=True)
++
++sys.setrecursionlimit(10_000)
+ 
++nsims = None
+ 
+ #  selecting the database based on the simulation method (power or performance)
+ if config.simulation_method == "power_knobs":
+@@ -42,9 +50,8 @@
+ else:
+     raise NameError("Simulation method unavailable")
+ 
+-
+-
+-def run_with_params(workloads, SA_depth, freq_range, base_budget_scaling, trans_sel_mode, study_type, workload_folder, date_time, check_points, ret_value):
++def run_with_params(workloads, SA_depth, freq_range, base_budget_scaling, farsi_start_time, trans_sel_mode, study_type, run_folder, workload_folder, date_time, check_points, ret_value):
++    global nsims
+     config.transformation_selection_mode = trans_sel_mode
+     config.SA_depth = SA_depth
+     # set the number of workers to be used (parallelism applied)
+@@ -56,7 +63,8 @@
+     #study_type = "cost_PPA"
+ 
+ 
+-    workloads_first_letter  = '_'.join(sorted([el[0] for el in workloads]))
++    # workloads_first_letter  = '_'.join(sorted([el[0] for el in workloads]))
++    workloads_first_letter = workloads[0][0]
+     budget_values = "lat_"+str(base_budget_scaling["latency"])+"__pow_"+str(base_budget_scaling["power"]) + "__area_"+str(base_budget_scaling["area"])
+ 
+ 
+@@ -74,15 +82,33 @@
+     else:
+         result_folder = os.path.join(workload_folder,
+                                  date_time + "____"+ budget_values +"___workloads_"+workloads_first_letter)
++    assert not os.path.exists(result_folder), f"{result_folder} already exists!"
+     # set the IP spawning params
+-    ip_loop_unrolling = {"incr": 2, "max_spawn_ip": 17, "spawn_mode": "geometric"}
++    if config.MAX_SPAWN_IP is not None:
++        ip_loop_unrolling = {"incr": 2, "max_spawn_ip": config.MAX_SPAWN_IP, "spawn_mode": "geometric"}
++    else:
++        ip_loop_unrolling = {"incr": 2, "spawn_mode": "geometric"}
+     #ip_freq_range = {"incr":3, "upper_bound":8}
+     #mem_freq_range = {"incr":3, "upper_bound":6}
+     #ic_freq_range = {"incr":4, "upper_bound":6}
+-    ip_freq_range = freq_range
+-    mem_freq_range = freq_range
+-    ic_freq_range = freq_range
+-    tech_node_SF = {"perf":1, "energy":{"non_gpp":.064, "gpp":1}, "area":{"non_mem":.0374 , "mem":.07, "gpp":1}}   # technology node scaling factor
++    ip_freq_range = freq_range["ip"]
++    mem_freq_range = freq_range["mem"]
++    ic_freq_range = freq_range["ic"]
++    tech_node_SF = {
++        "perf"  : 1., 
++        "energy": {
++            "ip": config.ENERGY_SCALE_F_IP, 
++            "ic": config.ENERGY_SCALE_F_IC, 
++            "mem": config.ENERGY_SCALE_F_MEM,
++            "gpp": config.ENERGY_SCALE_F_GPP
++        }, 
++        "area"  : {
++            "ip": config.AREA_SCALE_F_IP, 
++            "ic": config.AREA_SCALE_F_IC, 
++            "mem": config.AREA_SCALE_F_MEM, 
++            "gpp": config.AREA_SCALE_F_GPP
++        }
++    }   # technology node scaling factor
+     db_population_misc_knobs = {"ip_freq_correction_ratio": 1, "gpp_freq_correction_ratio": 1,
+                                 "ip_spawn": {"ip_loop_unrolling": ip_loop_unrolling, "ip_freq_range": ip_freq_range},
+                                 "mem_spawn": {"mem_freq_range":mem_freq_range},
+@@ -101,10 +127,9 @@
+     #sw_hw_database_population = {"db_mode": "hardcoded", "hw_graph_mode": "generated_from_scratch",
+     #                             "workloads": workloads, "misc_knobs": db_population_misc_knobs}
+     # for paper workloads
+-    sw_hw_database_population = {"db_mode": "parse", "hw_graph_mode": "generated_from_scratch",
++    sw_hw_database_population = {"db_mode": "parse", "hw_graph_mode": config.HW_GRAPH_MODE,
+                                  "workloads": workloads, "misc_knobs": db_population_misc_knobs}
+-    #sw_hw_database_population = {"db_mode": "parse", "hw_graph_mode": "generated_from_check_point",
+-    #                             "workloads": workloads, "misc_knobs": db_population_misc_knobs}
++    pprint(sw_hw_database_population)
+     # for check pointed
+     if check_points["start"]:
+         config.check_point_folder = check_points["folder"]
+@@ -115,13 +140,40 @@
+         sw_hw_database_population = {"db_mode": "parse", "hw_graph_mode": "generated_from_check_point",
+                                      "workloads": workloads, "misc_knobs": db_population_misc_knobs}
+ 
+-
+-
+     # depending on the study/substudy type, invoke the appropriate function
+     if study_type == "simple_run":
+-        dse_hndler = simple_run(result_folder, sw_hw_database_population, system_workers)
+-    if study_type == "simple_run_iterative":
+-        dse_hndler = simple_run_iterative(result_folder, sw_hw_database_population, system_workers)
++        if config.SINGLE_RUN in [0, 1]:
++            if not os.path.exists(workload_folder):
++                os.mkdir(workload_folder)
++            dse_hndler = simple_run(farsi_start_time, result_folder, sw_hw_database_population, system_workers)
++        elif config.SINGLE_RUN == 2:
++            print(run_folder)
++            all_sim_paths = sorted([d for d in glob.glob(f"{run_folder}/*") if os.path.isdir(d)])
++            print(f"Starting {len(all_sim_paths)} simulations...")
++            arg_list = []
++            pool = multiprocessing.Pool(config.FARSI_INT_PARALLELISM)
++            for sim_id, sub_res_folder in enumerate(all_sim_paths):
++                sub_res_folder = "/".join(result_folder.split("/")[:-2]) + f"/{sim_id+1}/" + "/".join(result_folder.split("/")[-2:])
++                os.makedirs(sub_res_folder, exist_ok=True)
++                # dse_hndler = simple_run(farsi_start_time, sub_res_folder, sw_hw_database_population, system_workers)
++                arg_list.append((farsi_start_time, sub_res_folder, sw_hw_database_population, system_workers))
++            if config.EXPLR_TIMEOUT is None:
++                pool.starmap(simple_run, arg_list)
++            else:
++                rc = pool.starmap_async(simple_run, arg_list)
++                try:
++                    # get the task result with a timeout
++                    value = rc.get(timeout=config.EXPLR_TIMEOUT)
++                except multiprocessing.TimeoutError as e:
++                    print("Timed out")
++            for sub_res_folder in all_sim_paths:
++                sub_res_folder = create_final_folder(sub_res_folder)
++                # aggregate the results (as they are spread out among multiple folders)
++                aggregate_results(sub_res_folder)
++            return
++        else: raise NotImplementedError
++    elif study_type == "simple_run_iterative":
++        dse_hndler = simple_run_iterative(farsi_start_time, result_folder, sw_hw_database_population, system_workers)
+     elif study_type == "cost_PPA" and study_subtype == "run":
+         input_error_output_cost_sensitivity_study(result_folder, sw_hw_database_population, system_workers, False, False)
+     elif study_type == "input_error_output_cost_sensitivity" and study_subtype == "run":
+@@ -139,11 +191,13 @@
+                                       config.FARSI_cost_correlation_study_prefix + "_0_1.csv")
+         plot_3d_dist(result_dir_addr, full_file_addr, workloads)
+ 
+-    print("reason to terminate: " + dse_hndler.dse.reason_to_terminate)
+-    ret_value.value = int(dse_hndler.dse.reason_to_terminate == "out_of_memory")
+-
+-
+-
++    if config.SINGLE_RUN == 0:
++        print("reason to terminate: " + dse_hndler.dse.reason_to_terminate)
++        assert dse_hndler.dse.reason_to_terminate != "", "Reason to terminate cannot be \"\""
++    try:
++        ret_value.value = int(dse_hndler.dse.reason_to_terminate == "out_of_memory")
++    except:
++        ret_value = int(dse_hndler.dse.reason_to_terminate == "out_of_memory")
+ 
+ def run(check_points_start, check_points_top_folder, previous_results):
+     #study_type = "simple_run_iterative"
+@@ -153,15 +207,16 @@
+     assert study_type in ["cost_PPA", "simple_run", "input_error_output_cost_sensitivity", "input_error_input_cost_sensitivity", "simple_run_iterative"]
+     assert study_subtype in ["run", "plot_3d_distance"]
+     SA_depth = [10]
+-    freq_range = [1, 4, 6, 8]
+-    #freq_range = [1] #, 4, 6, 8]
++    freq_range = config.FREQ_RANGE
++    # freq_range = {"mem": [1], "ip": [1], "ic": [1]} # todo mem scaling doesn't scale power
++    # freq_range = [1] #, 4, 6, 8]
+ 
+     # fast run
+-    workloads = [{"audio_decoder"}]
++    # workloads = [{"audio_decoder"}]
+     #workloads = [{"synthetic"}]
+-    workloads = [{"hpvm_cava"}]
+-    workloads = [{"edge_detection"}]
+-    workloads = [ {"edge_detection_1"},{"edge_detection_1", "edge_detection_2"}, {"edge_detection_1", "edge_detection_2", "edge_detection_3"}, {"edge_detection_1", "edge_detection_2", "edge_detection_3", "edge_detection_4"} ]#, "edge_detection_4"}]
++    # workloads = [{"hpvm_cava"}]
++    # workloads = [{"edge_detection"}]
++    # workloads = [ {"edge_detection_1"},{"edge_detection_1", "edge_detection_2"}, {"edge_detection_1", "edge_detection_2", "edge_detection_3"}, {"edge_detection_1", "edge_detection_2", "edge_detection_3", "edge_detection_4"} ]#, "edge_detection_4"}]
+ 
+     #workloads = [{"edge_detection_1", "edge_detection_2"}]
+     #workloads = [{"SLAM"}]
+@@ -177,28 +232,131 @@
+     # entire workload set
+     #workloads = [{"hpvm_cava"}, {"audio_decoder"}, {"edge_detection"}, {"edge_detection", "audio_decoder"}, {"hpvm_cava", "audio_decoder"}, {"hpvm_cava", "edge_detection"} , {"audio_decoder", "edge_detection", "hpvm_cava"}]
+ 
+-    latency_scaling_range  = [.8, 1, 1.2]
+-    power_scaling_range  = [.8,1,1.2]
+-    area_scaling_range  = [.8,1,1.2]
++    # latency_scaling_range  = [.8, 1, 1.2]
++    # power_scaling_range  = [.8,1,1.2]
++    # area_scaling_range  = [.8,1,1.2]
+ 
+     # edge detection lower budget
+-    latency_scaling_range  = [1]
++    # latency_scaling_range  = [1] # , 4]
+     # for audio
+-    #power_scaling_range  = [.6,.5,.4,.3]
+-    #area_scaling_range  = [.6,.5,.5,.3]
++    # power_scaling_range  = [1] # ,.8,.6]
++    # area_scaling_range  = [1]
+ 
+-    power_scaling_range  = [1]
+-    area_scaling_range  = [1]
++    power_scaling_range   = [1]
++    area_scaling_range    = [1]
++    latency_scaling_range = [1]
+ 
+     result_home_dir_default = os.path.join(os.getcwd(), "data_collection/data/" + study_type)
+     result_folder = os.path.join(config.home_dir, "data_collection/data/" + study_type)
+-    date_time = datetime.now().strftime('%m-%d_%H-%M_%S')
+-    run_folder = os.path.join(result_folder, date_time)
+-    os.mkdir(run_folder)
++    if config.REGRESSION_RUNS:
++        assert len(sys.argv) == 21 or len(sys.argv) == 22, f"Expecting 21 or 22 args but received {len(sys.argv)}\nExample usage: python FARSI_what_ifs_with_params.py INPUT_DIR WORKLOAD_WITHOUT_DAG_ID NUM_DAGS RUN_FOLDER SOC_DIM CONSTRAIN_TOPOLOGY DROP_TASKS_THAT_PASSED_DEADLINE USE_CUST_SCHED_POLICIES SINGLE_RUN OVERWRITE_INIT_SOC DYN_SCHEDULING_INSTEAD_OF_MAPPING CUST_SCHED_POLICY_NAME CUST_SCHED_CONSIDER_DM_TIME DYN_SCHEDULING_MEM_REMAPPING EXPLR_TIMEOUT FARSI_INT_PARALLELISM [RUN_PARSED_SYSTEM] > logs/1/run.log"
++        date_time = ""
++        config.FARSI_INP_DIR = sys.argv[1]
++        workloads = [[f"{sys.argv[2]}_{i}" for i in range(int(sys.argv[3]))]]
++        run_folder = sys.argv[4]
++        print(f"Workloads = {workloads}")
++        print(f"Run path = {run_folder}")
++        assert os.path.isdir(run_folder)
++        assert config.domain == workloads[0][0].split('_')[0]
++        
++        config.RT_AWARE_BLK_SEL = int(sys.argv[6])
++        config.RT_AWARE_TASK_SEL = int(sys.argv[7])
++        config.CLUSTER_KRNLS_NOT_TO_CONSIDER = int(sys.argv[8])
++        config.heuristic_type = str(sys.argv[9])
++        config.CONSTRAIN_TOPOLOGY = int(sys.argv[10])
++        config.DROP_TASKS_THAT_PASSED_DEADLINE = int(sys.argv[11])
++        config.USE_CUST_SCHED_POLICIES = bool(int(sys.argv[12]))
++        config.SINGLE_RUN = int(sys.argv[13])
++        if config.CONSTRAIN_TOPOLOGY:
++            config.MEMOIZE_SHORTEST_PATHS = True
++            config.HW_GRAPH_MODE = "parse"  # "generated_from_scratch"
++            config.SOC_DIM = (int(sys.argv[5].split('x')[0]), int(sys.argv[5].split('x')[1]))
++        else:
++            config.HW_GRAPH_MODE = "generated_from_scratch" # "parse"
++            config.MEMOIZE_SHORTEST_PATHS = False
++        config.OVERWRITE_INIT_SOC = int(sys.argv[14])
++        config.DYN_SCHEDULING_INSTEAD_OF_MAPPING = int(sys.argv[15])
++
++        config.CUST_SCHED_POLICY_NAME = sys.argv[16]
++        config.CUST_SCHED_CONSIDER_DM_TIME = bool(int(sys.argv[17]))
++        config.DYN_SCHEDULING_MEM_REMAPPING = bool(int(sys.argv[18]))
++        config.EXPLR_TIMEOUT = float(sys.argv[19]) # FARSI will get killed after this much time from start
++        if config.EXPLR_TIMEOUT < 0: config.EXPLR_TIMEOUT = None
++        config.FARSI_INT_PARALLELISM = int(sys.argv[20]) # only used for Jia, i.e., config.SINGLE_RUN == 2
++        if len(sys.argv) == 22:
++            RUN_PARSED_SYSTEM = int(sys.argv[21])
++            if RUN_PARSED_SYSTEM:
++                config.HW_GRAPH_MODE = "parse"
++            else:
++                config.HW_GRAPH_MODE = "generated_from_scratch"
++        assert isinstance(config.USE_CUST_SCHED_POLICIES, bool)
++        assert isinstance(config.DYN_SCHEDULING_MEM_REMAPPING, bool)
++        assert isinstance(config.CUST_SCHED_CONSIDER_DM_TIME, bool)
++        assert isinstance(config.CUST_SCHED_POLICY_NAME, str)
++    else:
++        date_time = datetime.now().strftime('%m-%d_%H-%M_%S')
++        run_folder = os.path.join(result_folder, date_time)
++        assert not os.path.isdir(run_folder)
++        os.makedirs(run_folder)
++        workloads = config.workloads
++
++    if not config.USE_CUST_SCHED_POLICIES: # if we don't have custom scheduling policies, we cannot do memory aware scheduling
++        config.CUST_SCHED_CONSIDER_DM_TIME = False
++    if not config.DYN_SCHEDULING_INSTEAD_OF_MAPPING or not config.USE_CUST_SCHED_POLICIES: # if FARSI is mapping, or if we don't have custom scheduling policies, we cannot do memory remapping during scheduling
++        config.DYN_SCHEDULING_MEM_REMAPPING = False
++
++    print(f"Config params:\n"
++        f"\tEXPLR_TIMEOUT = {config.EXPLR_TIMEOUT}\n"
++        f"\tFARSI_INP_DIR = {config.FARSI_INP_DIR}\n"
++        f"\tREGRESSION_RUNS = {config.REGRESSION_RUNS}\n"
++        f"\tCONSTRAIN_TOPOLOGY = {config.CONSTRAIN_TOPOLOGY}\n"
++        f"\tDROP_TASKS_THAT_PASSED_DEADLINE = {config.DROP_TASKS_THAT_PASSED_DEADLINE}\n"
++        f"\tSINGLE_RUN = {config.SINGLE_RUN}\n"
++        f"\tMEMOIZE_SHORTEST_PATHS = {config.MEMOIZE_SHORTEST_PATHS}\n"
++        f"\tOVERWRITE_INIT_SOC = {config.OVERWRITE_INIT_SOC}\n"
++        f"\tSA_breadth = {config.SA_breadth}\n"
++        f"\tSA_depth = {config.SA_depth}\n"
++        f"\tHW_GRAPH_MODE = {config.HW_GRAPH_MODE}\n\n"
++        f"\theuristic_type = {config.heuristic_type}\n"
++        f"\tCLUSTER_KRNLS_NOT_TO_CONSIDER = {config.CLUSTER_KRNLS_NOT_TO_CONSIDER}\n"
++        f"\tDYN_SCHEDULING_INSTEAD_OF_MAPPING = {config.DYN_SCHEDULING_INSTEAD_OF_MAPPING}\n"
++        f"\tDYN_SCHEDULING_MEM_REMAPPING = {config.DYN_SCHEDULING_MEM_REMAPPING}\n"
++        f"\tUSE_CUST_SCHED_POLICIES = {config.USE_CUST_SCHED_POLICIES}\n"
++        f"\tCUST_SCHED_CONSIDER_DM_TIME = {config.CUST_SCHED_CONSIDER_DM_TIME}\n"
++        f"\tRT_AWARE_TASK_SEL = {config.RT_AWARE_TASK_SEL}\n"
++        f"\tRT_AWARE_BLK_SEL = {config.RT_AWARE_BLK_SEL}\n"
++        f"\tDYN_SCHEDULING_MEM_REMAPPING_POL = {config.DYN_SCHEDULING_MEM_REMAPPING_POL}\n"
++        f"\tCUST_SCHED_POLICY_NAME = {config.CUST_SCHED_POLICY_NAME}\n"
++        )
++    if config.SINGLE_RUN == 2:
++        print(f"\tFARSI_INT_PARALLELISM = {config.FARSI_INT_PARALLELISM}")
++
++    # Sanity checks
++    if config.DYN_SCHEDULING_INSTEAD_OF_MAPPING:
++        assert config.heuristic_type == "FARSI", "Other modes unsupported"
++        config.max_krnel_stagnation_ctr = 0
++        print(f"OVERRIDING max_krnel_stagnation_ctr to 0 for ARTEMIS")
++    else:
++        config.cache_seen_designs = False
++        print(f"OVERRIDING cache_seen_designs to False for FARSI")
++    print("Setup of config parameters complete.")
++    if config.DROP_TASKS_THAT_PASSED_DEADLINE:
++        assert config.SINGLE_RUN in [1, 2]
++    if config.SINGLE_RUN == 0:
++        latency_scaling_range = config.BUDGET_SCALES["lat"]
++        power_scaling_range   = config.BUDGET_SCALES["pow"]
++        area_scaling_range    = config.BUDGET_SCALES["area"]
++        print(f"OVERRIDING budget_scales to")
++        pprint(config.BUDGET_SCALES)
++        assert not config.DROP_TASKS_THAT_PASSED_DEADLINE, "Task dropping can be enabled for simulation-only mode, not for exploration"
++    if config.CONSTRAIN_TOPOLOGY:
++        assert config.HW_GRAPH_MODE == "parse", "Constrained topology mode requires a starting HW graph"
+ 
+     #transformation_selection_mode_list = ["random", "arch-aware"]  # choose from {random, arch-aware}
+-    #transformation_selection_mode_list = ["random"]
+-    transformation_selection_mode_list = ["arch-aware"]
++    if config.heuristic_type == "FARSI":
++        transformation_selection_mode_list = ["arch-aware"]
++    else:
++        transformation_selection_mode_list = ["random"]
+ 
+     check_points_values = []
+     if check_points_start:
+@@ -221,15 +379,14 @@
+             for w in workloads:
+                 workloads_first_letter = '_'.join(sorted([el[0] for el in w])) +"__"+trans_sel_mode[0]
+                 workload_folder = os.path.join(run_folder, workloads_first_letter)
+-                if not os.path.exists(workload_folder):
+-                    os.mkdir(workload_folder)
+                 for d in SA_depth:
+                     for latency_scaling,power_scaling, area_scaling in itertools.product(latency_scaling_range, power_scaling_range, area_scaling_range):
+                         base_budget_scaling = {"latency": latency_scaling, "power": power_scaling, "area": area_scaling}
++                        farsi_start_time = time.time()
+                         if config.memory_conscious:
+                             # use subprocess  to free memory
+                             ret_value = multiprocessing.Value("d", 0.0, lock=False)
+-                            p = multiprocessing.Process(target=run_with_params, args=[w, d, freq_range, base_budget_scaling, trans_sel_mode, study_type, workload_folder, date_time, check_point, ret_value])
++                            p = multiprocessing.Process(target=run_with_params, args=[w, d, freq_range, base_budget_scaling, farsi_start_time, trans_sel_mode, study_type, run_folder, workload_folder, date_time, check_point, ret_value])
+                             p.start()
+                             p.join()
+ 
+@@ -237,7 +394,8 @@
+                             if ret_value.value == 1:
+                                 return "out_of_memory", run_folder
+                         else:
+-                            dse_hndler = run_with_params(w, d, freq_range, base_budget_scaling, trans_sel_mode, study_type, workload_folder, date_time, check_point)
++                            ret_value = 0.
++                            run_with_params(w, d, freq_range, base_budget_scaling, farsi_start_time, trans_sel_mode, study_type, run_folder, workload_folder, date_time, check_point, ret_value)
+     return "others", run_folder
+ 
+ def create_final_folder(run_folder):
+@@ -264,6 +422,8 @@
+     for dir in sorted_based_on_depth:
+         if "result_summary" in dir:
+             file_to_copy = os.path.join(dir, "FARSI_simple_run_0_1_all_reults.csv")
++            if not os.path.exists(file_to_copy):
++                continue
+             file = open(file_to_copy, "r")
+             data2 = file.read().splitlines(True)
+             file.close()
+@@ -279,6 +439,7 @@
+ 
+ 
+ def run_batch(check_points_start, check_points_top_folder):
++    global nsims
+     # check pointing information
+     """
+     #check_points_start = False
+@@ -319,9 +480,10 @@
+             previous_results = [dir for dir in all_dirs if "result_summary" in dir][0]
+         else:
+             # adjust the name so we would know which folder contains the final information
+-            run_folder = create_final_folder(run_folder)
+-            # aggregate the results (as they are spread out among multiple folders)
+-            aggregate_results(run_folder)
++            if config.SINGLE_RUN != 2:
++                run_folder = create_final_folder(run_folder)
++                # aggregate the results (as they are spread out among multiple folders)
++                aggregate_results(run_folder)
+             break
+ 
+ 

@@ -1,0 +1,30 @@
+--- ./Project_FARSI_orig/design_utils/components/mapping.py
++++ ./Project_FARSI/design_utils/components/mapping.py
+@@ -200,6 +200,7 @@
+         work_ratio = 0
+         for block_dir, work_ratio_ in self.block_dir_workRatio_dict.items():
+             if block_name == block_dir[0].instance_name and block_dir[1] == dir_:
++                # print(f" @@ block_dir = {block_name}, work_ratio = {work_ratio_}")
+                 for family_member, work_ratio_value in work_ratio_.items():
+                     if not (family_member in self.task.get_fake_family_name()) and (family_member in family_member_names):
+                         work_ratio += work_ratio_value
+@@ -257,7 +258,11 @@
+     #       print the task name and its corresponding blocks. Used for debugging purposes.
+     # ------------------------------
+     def print(self):
+-        print(self.task.name + str(list(map(lambda block: block.name, self.block_workRatio_dict.keys()))))
++        # print(f"@@ >>>> TASK: {self.task.name}")
++        # print(f"@@ >>>> BLOCK DIR WORKRATIO: ")
++        for k, v in self.block_dir_workRatio_dict.items():
++            print(f"@@ {k[0].instance_name}, {k[1]} -> {v}")
++        # print(self.task.name + str(list(map(lambda block: block.name, self.block_workRatio_dict.keys()))))
+ 
+ 
+ # This task maps a all the tasks within the workload to a processing blocks
+@@ -385,4 +390,4 @@
+     # ------------------------------
+     def print(self):
+         for el in self.tasks_to_blocks_map_list:
+-            el.print()
+\ No newline at end of file
++            el.print()

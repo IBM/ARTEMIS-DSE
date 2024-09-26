@@ -1,0 +1,45 @@
+--- ./Project_FARSI_orig/visualization_utils/vis_hardware.py
++++ ./Project_FARSI/visualization_utils/vis_hardware.py
+@@ -215,7 +215,6 @@
+         output_file_name_2 =  config.latest_visualization+"/system_image.pdf"
+         if not os.path.exists(config.latest_visualization):
+             os.system("mkdir -p " + config.latest_visualization)
+-
+         global ctr
+         ctr = 0
+ 
+@@ -223,7 +222,7 @@
+             output_file_name_1 = output_file_name_1.split(".pdf")[0] + ".dot"
+             output_file_name_2 = output_file_name_2.split(".pdf")[0] + ".dot"
+ 
+-        hardware_dot_graph =pgv.AGraph()
++        hardware_dot_graph = pgv.AGraph()
+         hardware_dot_graph.node_attr['style'] = 'filled'
+         hardware_graph = sim_dp.get_hardware_graph()
+         root = hardware_graph.get_root()
+@@ -237,14 +236,16 @@
+         hardware_dot_graph
+         time.sleep(.0008)
+ 
+-        output_file_1 = os.path.join(output_folder, output_file_name_1)
+-        output_file_2 = os.path.join(output_folder, output_file_name_2)
++        # output_file_1 = os.path.join(output_folder, output_file_name_1)
++        # output_file_2 = os.path.join(output_folder, output_file_name_2)
+         #output_file_real_time_vis = os.path.join(".", output_file_name)  # this is used for realtime visualization
+         if graphing_mode == "block_extra":
+-            hardware_dot_graph.draw(output_file_1,prog='circo')
+-            hardware_dot_graph.draw(output_file_2, prog='circo')
++            hardware_dot_graph.draw(output_file_name_1,prog='circo')
++            hardware_dot_graph.draw(output_file_name_2, prog='circo')
+         else:
+-            hardware_dot_graph.draw(output_file_1,prog='circo')
+-            hardware_dot_graph.draw(output_file_2,prog='circo')
++            hardware_dot_graph.draw(output_file_name_1,prog='circo')
++            hardware_dot_graph.draw(output_file_name_2,prog='circo')
++        # print(f"@@ Drawing into {output_file_name_1} and {output_file_name_2}")
+     except:
+-        print("could not draw the system_image. Moving on for now. Fix Later.")
+\ No newline at end of file
++        print("could not draw the system_image. Moving on for now. Fix Later.")
++        exit(1)
+\ No newline at end of file

@@ -1,0 +1,15 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/hpvm_cava_database - Task Itr Count.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/hpvm_cava_database - Task Itr Count.csv"
+@@ -0,0 +1,11 @@
++Task Name,number of iterations
++source,1
++scale_fxp_cloned,151
++demosaic_fxp_cloned,151
++denoise_fxp_cloned,151
++transform_fxp_cloned,151
++gamut_map_fxp_cloned,151
++tone_map_fxp_cloned,151
++descale_fxp_cloned,151
++dummy_last,1
++siink,1
+\ No newline at end of file

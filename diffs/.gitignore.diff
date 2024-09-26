@@ -1,0 +1,31 @@
+--- ./Project_FARSI_orig/.gitignore
++++ ./Project_FARSI/.gitignore
+@@ -1,6 +1,26 @@
++
+ .idea/
+ data_collection/data
+ data_collection/.DS_Store
+-*pyc
++*.pyc
++*.png
++*.log
++*.dot
++*.zip
++*.pdf
+ __pycache__
+-specs/database_data/hardcoded
++.vscode/launch.json
++data_collection/collection_utils/what_ifs/__pycache__/*
++cacti_for_FARSI/*.csv
++cacti_for_FARSI/obj*
++cacti_for_FARSI/farsi_gen.cfg_cp.out
++cacti_for_FARSI/cacti
++cacti_for_FARSI/verification_result_file.csv
++cacti_for_FARSI/bottleneck_result_file.csv
++cacti_for_FARSI/farsi_gen.cfg_cp*
++cacti_for_FARSI/*.lock
++data_collection/collection_utils/what_ifs/verification_result_file.csv
++specs/database_data/parsing/inputs/*.lock
++specs/database_data/parsing/inputs/*.csv
++! specs/database_data/parsing/inputs/misc_database*.csv
++specs/database_data/parsing/inputs/bkup/*

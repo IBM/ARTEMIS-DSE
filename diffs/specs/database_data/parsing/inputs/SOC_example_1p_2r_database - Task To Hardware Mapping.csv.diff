@@ -1,0 +1,7 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/SOC_example_1p_2r_database - Task To Hardware Mapping.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/SOC_example_1p_2r_database - Task To Hardware Mapping.csv"
+@@ -0,0 +1,4 @@
++A53_0,LMEM_ic_2_1_sr1,LMEM_2_1_ta10,LMEM_ic_2_1_sr2
++souurce,souurce -> participant0,souurce -> participant0,souurce -> participant0
++siink,participant0 -> siink,participant0 -> siink,participant0 -> siink
++participant0,,,

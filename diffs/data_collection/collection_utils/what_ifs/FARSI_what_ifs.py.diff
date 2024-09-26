@@ -1,0 +1,277 @@
+--- ./Project_FARSI_orig/data_collection/collection_utils/what_ifs/FARSI_what_ifs.py
++++ ./Project_FARSI/data_collection/collection_utils/what_ifs/FARSI_what_ifs.py
+@@ -38,7 +38,7 @@
+ 
+ # ------------------------------
+ # Functionality:
+-#    show the the result of power/performance/area sweep 
++#    show the the result of power/performance/area sweep
+ # Variables:
+ #      full_dir_addr: name of the directory to get data from
+ #      full_file_addr: name of the file to get data from
+@@ -78,7 +78,7 @@
+ 
+     #color_values = grouped_multiple["norm_dist"]
+     print("maximum distance" + str(max(color_values)))
+-    X = latency_budget 
++    X = latency_budget
+     Y = power_budget
+     Z = area_budget
+ 
+@@ -127,7 +127,7 @@
+ #      unique_number: a number to differentiate between designs
+ #      file_name: output file name
+ # ------------------------------
+-def write_one_results(sim_dp, dse, reason_to_terminate, case_study, result_dir_specific, unique_number, file_name):
++def write_one_results(farsi_start_time, sim_dp, dse, reason_to_terminate, case_study, result_dir_specific, unique_number, file_name):
+     """
+     def convert_dict_to_parsable_csv(dict_):
+         list = []
+@@ -153,11 +153,26 @@
+         os.makedirs(result_dir_specific)
+ 
+ 
+-    compute_system_attrs = sim_dp.dp_stats.get_compute_system_attr()
+-    bus_system_attrs = sim_dp.dp_stats.get_bus_system_attr()
++    try:
++        compute_system_attrs = sim_dp.dp_stats.get_compute_system_attr()
++    except:
++        compute_system_attrs = {'':''}
++    try:
++        bus_system_attrs = sim_dp.dp_stats.get_bus_system_attr()
++    except:
++        bus_system_attrs = {'':''}
+     memory_system_attrs = sim_dp.dp_stats.get_memory_system_attr()
+-    speedup_dict, speedup_attrs = sim_dp.dp_stats.get_speedup_analysis(dse)
+-
++    if not config.STAGGERED_GRAPH_MODE: # TODO this hangs when the eval_design inside is called for the second time -- need to debug
++        speedup_dict, speedup_attrs = sim_dp.dp_stats.get_speedup_analysis(dse)
++    else:
++        farsi_curr_time = time.time()
++        print(f">> FARSI elapsed time (s): {farsi_curr_time - farsi_start_time}")
++        print("!!", dse.so_far_best_sim_dp.dp_stats.get_system_complex_metric("area"))
++        print("##", dse.so_far_best_sim_dp.dp_stats.get_system_complex_metric("power"))
++        print("@@", dse.so_far_best_sim_dp.dp.get_serial_design_time(), list((dse.so_far_best_sim_dp.dp_stats.get_system_complex_metric("latency")).values()))
++        max_lat = max(list((dse.so_far_best_sim_dp.dp_stats.get_system_complex_metric("latency")).values()))
++        if max_lat != 0.:
++            task_level_parallelism_speed_up_full_system = dse.so_far_best_sim_dp.dp.get_serial_design_time()/max_lat
+ 
+ 
+     output_file_minimal = os.path.join(result_dir_specific, file_name+ ".csv")
+@@ -169,6 +184,7 @@
+         output_fh_minimal = open(output_file_minimal, "a")
+     else:
+         output_fh_minimal = open(output_file_minimal, "w")
++        output_fh_minimal.write("elapsed_time,")
+         for metric in config.all_metrics:
+             output_fh_minimal.write(metric + ",")
+             if metric in sim_dp.database.db_input.get_budget_dict("glass").keys():
+@@ -226,11 +242,11 @@
+         for key, val in memory_system_attrs.items():
+             output_fh_minimal.write(str(key) + ",")
+ 
+-        for key, val in speedup_attrs.items():
+-            output_fh_minimal.write(str(key) + ",")
+-
+-        for key, val in speedup_dict.items():
+-            output_fh_minimal.write(str(key)+"_speedup_analysis" + ",")
++        if not config.STAGGERED_GRAPH_MODE:
++            for key, val in speedup_attrs.items():
++                output_fh_minimal.write(str(key) + ",")
++            for key, val in speedup_dict.items():
++                output_fh_minimal.write(str(key)+"_speedup_analysis" + ",")
+ 
+         for key,val in base_budget_scaling.items():
+             output_fh_minimal.write("budget_scaling_"+str(key) + ",")
+@@ -238,6 +254,7 @@
+ 
+ 
+     output_fh_minimal.write("\n")
++    output_fh_minimal.write(f"{farsi_curr_time - farsi_start_time},")
+     for metric in config.all_metrics:
+         data_ = sim_dp.dp_stats.get_system_complex_metric(metric)
+         if isinstance(data_, dict):
+@@ -330,8 +347,10 @@
+     output_fh_minimal.write(str(block_selection_time)+ ",")  # for now only write the latency accuracy as the other
+     output_fh_minimal.write(str(transformation_selection_time)+ ",")  # for now only write the latency accuracy as the other
+     output_fh_minimal.write(str(config.transformation_selection_mode)+ ",")  # for now only write the latency accuracy as the other
+-    output_fh_minimal.write(str(sim_dp.dp_stats.dist_to_goal(metrics_to_look_into = ["area", "latency", "power", "cost"], mode = "eliminate")) + ",")
+-    output_fh_minimal.write(str(sim_dp.dp_stats.dist_to_goal(metrics_to_look_into = ["area", "latency", "power"], mode = "eliminate")) + ",")
++    # output_fh_minimal.write(str(sim_dp.dp_stats.dist_to_goal(metrics_to_look_into = ["area", "latency", "power", "cost"], mode = "eliminate")) + ",")
++    # output_fh_minimal.write(str(sim_dp.dp_stats.dist_to_goal(metrics_to_look_into = ["area", "latency", "power"], mode = "eliminate")) + ",")
++    output_fh_minimal.write(str(sim_dp.dp_stats.dist_to_goal(metrics_to_look_into = config.budgetted_metrics, mode = "eliminate")) + ",")
++    output_fh_minimal.write(str(sim_dp.dp_stats.dist_to_goal(metrics_to_look_into = [metric for metric in config.budgetted_metrics if metric != "cost"], mode = "eliminate")) + ",")
+     output_fh_minimal.write(str(blk_cnt) + ",")  # for now only write the latency accuracy as the other
+     output_fh_minimal.write(str(pe_cnt) + ",")  # for now only write the latency accuracy as the other
+     output_fh_minimal.write(str(bus_cnt) + ",")  # for now only write the latency accuracy as the other
+@@ -360,11 +379,11 @@
+     for key, val in memory_system_attrs.items():
+         output_fh_minimal.write(str(val) + ",")
+ 
+-    for key, val in speedup_attrs.items():
+-        output_fh_minimal.write(str(val) + ",")
+-
+-    for key, val in speedup_dict.items():
+-        output_fh_minimal.write(convert_dictionary_to_parsable_csv_with_semi_column(val)+",")
++    if not config.STAGGERED_GRAPH_MODE:
++        for key, val in speedup_attrs.items():
++            output_fh_minimal.write(str(val) + ",")
++        for key, val in speedup_dict.items():
++            output_fh_minimal.write(convert_dictionary_to_parsable_csv_with_semi_column(val)+",")
+ 
+     for key,val in base_budget_scaling.items():
+         output_fh_minimal.write(str(val) + ",")
+@@ -373,12 +392,12 @@
+ 
+ 
+ 
+-def simple_run_iterative(result_folder, sw_hw_database_population, system_workers=(1, 1)):
++def simple_run_iterative(farsi_start_time, result_folder, sw_hw_database_population, system_workers=(1, 1)):
+     case_study = "simple_run_iterative"
+     current_process_id = system_workers[0]
+     total_process_cnt = system_workers[1]
+     starting_exploration_mode = "from_scratch"
+-    print('cast study:' + case_study)
++    print('case study:' + case_study)
+     # -------------------------------------------
+     # set parameters
+     # -------------------------------------------
+@@ -543,7 +562,7 @@
+         run_ctr += 1
+         # write the results in the general folder
+         result_dir_specific = os.path.join(result_folder, "result_summary")
+-        write_one_results(dse_hndlr.dse.so_far_best_sim_dp,  dse_hndlr.dse, dse_hndlr.dse.reason_to_terminate, case_study,
++        write_one_results(farsi_start_time, dse_hndlr.dse.so_far_best_sim_dp,  dse_hndlr.dse, dse_hndlr.dse.reason_to_terminate, case_study,
+                           result_dir_specific, unique_suffix,
+                           config.FARSI_simple_run_prefix + "_" + str(current_process_id) + "_" + str(total_process_cnt))
+         dse_hndlr.dse.write_data_log(list(dse_hndlr.dse.get_log_data()), dse_hndlr.dse.reason_to_terminate, case_study, result_dir_specific, unique_suffix,
+@@ -553,7 +572,7 @@
+         result_folder_modified = result_folder+ "/runs/" + str(ctr) + "/"
+         os.system("mkdir -p " + result_folder_modified)
+         copy_DSE_data(result_folder_modified)
+-        write_one_results(dse_hndlr.dse.so_far_best_sim_dp, dse_hndlr.dse, dse_hndlr.dse.reason_to_terminate, case_study, result_folder_modified, unique_suffix,
++        write_one_results(farsi_start_time, dse_hndlr.dse.so_far_best_sim_dp, dse_hndlr.dse, dse_hndlr.dse.reason_to_terminate, case_study, result_folder_modified, unique_suffix,
+                       config.FARSI_simple_run_prefix + "_" + str(current_process_id) + "_" + str(total_process_cnt))
+ 
+         os.system("cp " + config.home_dir+"/settings/config.py"+ " "+ result_folder)
+@@ -564,12 +583,12 @@
+ # Variables:
+ #      system_workers:  used for parallelizing the data collection: (current process id, total number workers)
+ # ------------------------------
+-def simple_run(result_folder, sw_hw_database_population, system_workers=(1, 1)):
++def simple_run(farsi_start_time, result_folder, sw_hw_database_population, system_workers=(1, 1)):
+     case_study = "simple_run"
+     current_process_id = system_workers[0]
+     total_process_cnt = system_workers[1]
+     starting_exploration_mode = "from_scratch"
+-    print('cast study:' + case_study)
++    print('case study:' + case_study)
+     # -------------------------------------------
+     # set parameters
+     # -------------------------------------------
+@@ -599,23 +618,46 @@
+              "one_over_area": 1}
+         hw_sampling = {"mode": "exact", "population_size": 1, "reduction": reduction,
+                        "accuracy_percentage": accuracy_percentage}
+-        db_input = database_input_class(sw_hw_database_population)
+-        print("hw_sampling:" + str(hw_sampling))
+-        print("budget set to:" + str(db_input.get_budget_dict("glass")))
++        db_input = database_input_class(sw_hw_database_population, result_folder)
++        print("hw_sampling:")
++        pprint(hw_sampling)
++        print("budget set to:")
++        pprint(db_input.get_budget_dict("glass"))
++        print("task list: " + str([t.task_name for t in db_input.tasksL]))
+         unique_suffix = str(total_process_cnt) + "_" + str(current_process_id) + "_" + str(run_ctr)
+ 
+-
++        result_folder_modified = result_folder + "/runs/" + str(run_ctr) + "/"
++        os.system("mkdir -p " + result_folder_modified)
+         # run FARSI
+-        dse_hndlr = run_FARSI(result_folder, unique_suffix, case_study, db_input, hw_sampling,
+-                              sw_hw_database_population["hw_graph_mode"])
+-        #dse_hndlr = run_FARSI_only_simulation(result_folder, unique_suffix, db_input, hw_sampling,
+-        #                      sw_hw_database_population["hw_graph_mode"])
+-
+-
++        if config.PRINT_SCHEDULE:
++            print("@@ Arrival Time,Schedule Time,DAG ID,Task Name,Block Name,Est Exec Time")
++        if config.SINGLE_RUN >= 1:
++            dse_hndlr = run_FARSI_only_simulation(farsi_start_time, result_folder, result_folder_modified, unique_suffix, db_input, hw_sampling,
++                                  sw_hw_database_population["hw_graph_mode"])
++        elif config.SINGLE_RUN == 0:
++            dse_hndlr = run_FARSI(farsi_start_time, result_folder, result_folder_modified, unique_suffix, case_study, db_input, hw_sampling,
++                                  sw_hw_database_population["hw_graph_mode"])
++        else: raise NotImplementedError
+         run_ctr += 1
++        # write the results in the general folder
++        result_dir_specific = os.path.join(result_folder, "result_summary")
++        write_one_results(farsi_start_time, dse_hndlr.dse.so_far_best_sim_dp,  dse_hndlr.dse, dse_hndlr.dse.reason_to_terminate, case_study,
++                            result_dir_specific, unique_suffix,
++                            config.FARSI_simple_run_prefix + "_" + str(current_process_id) + "_" + str(total_process_cnt))
++        dse_hndlr.dse.write_data_log(list(dse_hndlr.dse.get_log_data()), dse_hndlr.dse.reason_to_terminate, case_study, result_dir_specific, unique_suffix,
++                        config.FARSI_simple_run_prefix + "_" + str(current_process_id) + "_" + str(total_process_cnt))
++
++        # write the results in the specific folder
++        # copy_DSE_data(result_folder_modified)
++        write_one_results(farsi_start_time, dse_hndlr.dse.so_far_best_sim_dp, dse_hndlr.dse, dse_hndlr.dse.reason_to_terminate, case_study, result_folder_modified, unique_suffix,
++                        config.FARSI_simple_run_prefix + "_" + str(current_process_id) + "_" + str(total_process_cnt))
+ 
+-        return dse_hndlr
++        os.system("cp " + config.home_dir+"/settings/config.py"+ " "+ result_folder)
+ 
++        if config.SINGLE_RUN == 2:
++            return
++        else:
++            return dse_hndlr
+ 
+ 
+ # ------------------------------
+@@ -782,7 +824,9 @@
+ 
+             print("hw_sampling:" + str(hw_sampling))
+             print("budget set to:" + str(db_input.budgets_dict))
+-            dse_hndlr = run_FARSI(result_folder, unique_suffix, db_input, hw_sampling, sw_hw_database_population["hw_graph_mode"])
++            result_folder_modified = result_folder + "/runs/" + str(run_ctr) + "/"
++            os.system("mkdir -p " + result_folder_modified)
++            dse_hndlr = run_FARSI(result_folder, result_folder_modified, unique_suffix, db_input, hw_sampling, sw_hw_database_population["hw_graph_mode"])
+             run_ctr += 1
+             # write the results in the general folder
+             result_dir_specific = os.path.join(result_folder, "result_summary")
+@@ -790,9 +834,7 @@
+                           file_prefix + "_" + str(current_process_id) + "_" + str(total_process_cnt))
+ 
+             # write the results in the specific folder
+-            result_folder_modified = result_folder + "/runs/" + str(run_ctr) + "/"
+-            os.system("mkdir -p " + result_folder_modified)
+-            copy_DSE_data(result_folder_modified)
++            # copy_DSE_data(result_folder_modified)
+             write_one_results(dse_hndlr.dse.so_far_best_sim_dp, dse_hndlr.dse, dse_hndlr.dse.reason_to_terminate, case_study, result_folder_modified, unique_suffix,
+                           file_prefix + "_" + str(current_process_id) + "_" + str(total_process_cnt))
+ 
+@@ -840,7 +882,8 @@
+ 
+ 
+     # set the IP spawning params
+-    ip_loop_unrolling = {"incr": 2, "max_spawn_ip": 17, "spawn_mode": "geometric"}
++    # ip_loop_unrolling = {"incr": 2, "max_spawn_ip": 17, "spawn_mode": "geometric"}
++    ip_loop_unrolling = {"incr": 2, "spawn_mode": "geometric"}
+     #ip_freq_range = {"incr":3, "upper_bound":8}
+     #mem_freq_range = {"incr":3, "upper_bound":6}
+     #ic_freq_range = {"incr":4, "upper_bound":6}
+@@ -882,7 +925,7 @@
+     elif study_type == "input_error_input_cost_sensitivity" and study_subtype == "run":
+         input_error_output_cost_sensitivity_study(result_folder, sw_hw_database_population, system_workers,True, True)
+     elif study_type == "cost_PPA" and study_subtype == "plot_3d_distance":
+-        result_folder = "05-28_18-46_40"  # edge detection 
++        result_folder = "05-28_18-46_40"  # edge detection
+         result_folder = "05-28_18-47_33" # hpvm cava
+         result_folder = "05-28_18-47_03"
+         result_folder = "05-31_16-24_49" # hpvm cava (2, tighter constraints)
+@@ -890,4 +933,4 @@
+                                                    "result_summary")
+         full_file_addr = os.path.join(result_dir_addr,
+                                       config.FARSI_cost_correlation_study_prefix + "_0_1.csv")
+-        plot_3d_dist(result_dir_addr, full_file_addr, workloads)
+\ No newline at end of file
++        plot_3d_dist(result_dir_addr, full_file_addr, workloads)

@@ -1,0 +1,13 @@
+--- ./Project_FARSI_orig/settings/config_cacti.py
++++ ./Project_FARSI/settings/config_cacti.py
+@@ -1,4 +1,7 @@
+-cact_bin_addr = "/home/reddi-rtx/FARSI_related_stuff/Project_FARSI_TECS/Project_FARSI_6/cacti_for_FARSI/cacti"
+-cacti_param_addr = "/home/reddi-rtx/FARSI_related_stuff/Project_FARSI_TECS/Project_FARSI_6/cacti_for_FARSI/farsi_gen.cfg"
+-cacti_data_log_file = "/home/reddi-rtx/FARSI_related_stuff/Project_FARSI_TECS/Project_FARSI_6/cacti_for_FARSI/data_log.csv"
++#Copyright (c) Facebook, Inc. and its affiliates.
++#This source code is licensed under the MIT license found in the
++#LICENSE file in the root directory of this source tree.
+ 
++cact_bin_addr = "cacti_for_FARSI/cacti"
++cacti_param_addr = "cacti_for_FARSI/farsi_gen.cfg"
++cacti_data_log_file = "cacti_for_FARSI/data_log.csv"

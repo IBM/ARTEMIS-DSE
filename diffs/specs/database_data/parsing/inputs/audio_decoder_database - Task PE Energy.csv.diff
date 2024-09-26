@@ -1,0 +1,23 @@
+--- "./Project_FARSI_orig/specs/database_data/parsing/inputs/audio_decoder_database - Task PE Energy.csv"
++++ "./Project_FARSI/specs/database_data/parsing/inputs/audio_decoder_database - Task PE Energy.csv"
+@@ -0,0 +1,19 @@
++Task Name,A53,IP_rs,IP_pf,IP_ro,IP_zs,IP_zp,IP_fft,IP_fir,IP_ol
++souurce,0,,,,,,,,
++rotatorSet_fxp_cloned,,103026000.0,,,,,,,
++psychoFilter_fxp_cloned,,,142002000.0,,,,,,
++rotateOrder1_fxp_cloned,,,,112713000.0,,,,,
++rotateOrder2_fxp_cloned,,,,386718000.0,,,,,
++rotateOrder3_fxp_cloned,,,,945308000.0,,,,,
++zoomSet_fxp_cloned,,,,,8986000.0,,,,
++zoomProcess_fxp_cloned,,,,,,100540000.0,,,
++setAndFFT_left_fxp_cloned,,,,,,,0206000.0,,
++setAndFFT_right_fxp_cloned,,,,,,,0206000.0,,
++FIR_left_fxp_cloned,,,,,,,,38597000.0,
++FIR_right_fxp_cloned,,,,,,,,38597000.0,
++IFFT_left_fxp_cloned,,,,,,,4371000.0,,
++IFFT_right_fxp_cloned,,,,,,,4371000.0,,
++overlap_left_fxp_cloned,,,,,,,,,103253000.0
++overlap_right_fxp_cloned,,,,,,,,,103235000.0
++siink,0,,,,,,,,
++dummy_last,0,,,,,,,,
+\ No newline at end of file
