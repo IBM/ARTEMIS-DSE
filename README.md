@@ -39,3 +39,6 @@ Next, we have the environment variables that are defined and used in ARTEMIS.
 * `CONSTRAIN_TOPOLOGY`: Whether to run in fixed-template mode (1), or not (0).
 
 The remainder of the parameters can be left as-is for the demo.
+
+## Compatibility
+This project has been tested extensively on Red Hat Enterprise Linux 8 (RHEL8) and is expected to work on other Linux distributions as well. While RHEL8 has been the primary testing environment, the project adheres to common Linux standards, making it compatible with most modern Linux systems. If you encounter any distribution-specific issues, please report them, and we will work to resolve them.
