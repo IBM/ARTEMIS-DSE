@@ -10,14 +10,14 @@ On the other hand, completely independent code, such as generators, scheduling p
 This needs to be done only once.
 ```bash
 git clone --recurse-submodules https://github.com/IBM/ARTEMIS-DSE.git && cd ARTEMIS-DSE
-./bootstrap.sh
+sh bootstrap.sh
 ```
 
 ### Contributing
 
 This needs to be done if you modify files inside `Project_FARSI/`.
 ```bash
-./create_diffs.sh
+sh create_diffs.sh
 ```
 Now, you can commit and push the files in `diffs/`.
 
