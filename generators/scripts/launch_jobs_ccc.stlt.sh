@@ -59,7 +59,7 @@ else
     elif [[ $FRAMEWORK == "FIXED_HET" ]]; then
         HW_GEN_MODE="one_ip_per_task"
     else
-        log "ERROR" ""
+        log "ERROR" "Invalid env variable FRAMEWORK: $FRAMEWORK"
         exit 1
     fi
 fi

@@ -13,6 +13,12 @@ git clone --recurse-submodules https://github.com/IBM/ARTEMIS-DSE.git && cd ARTE
 sh bootstrap.sh
 ```
 
+This setup performs the following steps:
+1. Clones CACTI and builds it
+2. Applies ARTEMIS-related patches onto the baseline FARSI repository
+3. Clones a reference copy of FARSI to facilitate modifications to the core codebase
+4. Creates a conda environment with all the required packages and activates it
+
 ### Contributing
 
 This needs to be done if you modify files inside `Project_FARSI/`.
