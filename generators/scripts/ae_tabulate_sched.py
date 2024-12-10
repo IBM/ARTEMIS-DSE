@@ -38,9 +38,12 @@ for ncv, nrad, nvit in ncv_nrad_nvit_all:
         for frame in frame_all:
             print(f"{frame}: {power_mW_dict[frame]:.0f}, ", end='')
         print('')
-        print(f"\t\tMet?")
+        print(f"\t\tDeadlines Met?")
         print("\t\t\t", end='')
         for frame in frame_all:
-            print(f"{frame}: {deadlines_met_dict[frame]:.0f}, ", end='')
+            if deadlines_met_dict[frame] == 0:
+                print(f"{frame}: No, ", end='')
+            else:
+                print(f"{frame}: Yes, ", end='')
         print('')
         
