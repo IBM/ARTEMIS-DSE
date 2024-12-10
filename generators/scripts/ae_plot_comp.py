@@ -77,7 +77,7 @@ def filter_if_not_met_budget(filter_flag:bool, val:float, ideal_dict:Dict[str, f
 
 def plot_one(log_dir, run_type, plot_stacking, SOC_TYPE, TOP_TYPE, sched_pol, dag_iat_all, ncv_nrad_nvit_all, color):
     if SOC_TYPE == "fixed_het":
-        frame_all = ["Fixed-Het", "ARTEMIS"]
+        frame_all = ["Fixed SoC", "ARTEMIS"]
         metric_all = ["lat", "pow", "area"]
         metric_all = ["lat_pow", "lat_area", "lat_wall_time"]
         width=.33# *2
@@ -88,14 +88,14 @@ def plot_one(log_dir, run_type, plot_stacking, SOC_TYPE, TOP_TYPE, sched_pol, da
 
     elif SOC_TYPE == "farsi":
         if TOP_TYPE == "ut":
-            frame_all = ["FARSI", "ARTEMIS-NO-DSE", "ARTEMIS"]
+            frame_all = ["FARSI", "ARTEMIS/No-DSE", "ARTEMIS"]
             width=.25
             if plot_stacking == 'v':
                 figsize=(3.,3)
             else:
                 figsize=(6.,1.5)
         else:
-            frame_all = ["FARSI", "ARTEMIS-NO-DSE", "ARTEMIS"]
+            frame_all = ["FARSI", "ARTEMIS/No-DSE", "ARTEMIS"]
             width=.225
             if plot_stacking == 'v':
                 figsize=(3.,3)
@@ -158,7 +158,7 @@ def plot_one(log_dir, run_type, plot_stacking, SOC_TYPE, TOP_TYPE, sched_pol, da
                         print(f"Parsing for {metric}, {dline}, {TOP_TYPE}, {frame}")
                         logger.warning(f"\t\tFramework: {frame} ({sched_pol})")
                         root = log_dir[dline][TOP_TYPE][frame](sched_pol)
-                        if TOP_TYPE == "ct" or frame == "Fixed-Het":
+                        if TOP_TYPE == "ct" or frame == "Fixed SoC":
                             csv_file = f"{root}/{soc_dim[0]}_{soc_dim[1]}_{iat}_{nc}_{nr}_{nv}.results.csv"
                         elif TOP_TYPE == "ut":
                             csv_file = f"{root}/{iat}_{nc}_{nr}_{nv}.results.csv"
@@ -358,13 +358,13 @@ if __name__ == "__main__":
                 "ct": { # constrained topology or fixed-template (in paper)
                     "ARTEMIS"     : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_1_mesh_BUDGET_SCALES_1._1._1._DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/ARTEMIS",
                     "FARSI"    : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_1_mesh_BUDGET_SCALES_1._1._1._DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FARSI-RR",
-                    "ARTEMIS-NO-DSE"   : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_1_mesh_BUDGET_SCALES_1._1._1._DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FARSI-DYN",
+                    "ARTEMIS/No-DSE"   : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_1_mesh_BUDGET_SCALES_1._1._1._DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FARSI-DYN",
                 },
                 "ut": { # unconstrained topology
                     "ARTEMIS"     : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_0_BUDGET_SCALES_1._*_DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/ARTEMIS",
-                    "Fixed-Het"   : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_1_bus_BUDGET_SCALES_1._1._1._DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FIXED_HET",
+                    "Fixed SoC"   : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_1_bus_BUDGET_SCALES_1._1._1._DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FIXED_HET",
                     "FARSI"    : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_0_BUDGET_SCALES_1._*_DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FARSI-RR",
-                    "ARTEMIS-NO-DSE"   : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_0_BUDGET_SCALES_1._*_DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FARSI-DYN",
+                    "ARTEMIS/No-DSE"   : lambda pol: f"{results_root}/miniera/EXPLORE_MODE_all-at-start_USE_DYN_NDAGS_1_f1_CONSTRAIN_TOPOLOGY_0_BUDGET_SCALES_1._*_DEADLINE_0.05_LAT_AMP_NO_REMAP_{pol}/FARSI-DYN",
                 },
             },
         },
