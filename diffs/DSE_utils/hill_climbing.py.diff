@@ -145,7 +145,7 @@
          # 2. for block identification/comparison of the move and the copied design
          safety_chk_passed = False
          # iterate and continuously generate moves, until one passes some sanity check
-+            
++
          while not safety_chk_passed:
              move_to_try, total_transformation_cnt = self.sel_moves(new_des_tup, "dist_rank")
              safety_chk_passed = move_to_try.safety_check(new_ex_dp)
@@ -617,7 +617,7 @@
 +                    imm_block = self.dh.get_immediate_block_multi_metric(hot_blck_synced, selected_metric, sorted_metric_dir, "swap", selected_krnl, tasks)
 +                    if getattr(imm_block, block_metric_attr) == getattr(hot_blck_synced, block_metric_attr):
 +                        feasible_transformations.remove('swap')
-+                    
++
 +                    # print(f"## imm_block       getattr({imm_block.instance_name}, {block_metric_attr}) = {getattr(imm_block, block_metric_attr)}")
 +                    # print(f"## hot_blck_synced getattr({hot_blck_synced.instance_name}, {block_metric_attr}) = {getattr(hot_blck_synced, block_metric_attr)}")
 +                    # print(f"## 1 feasible_transformations = {feasible_transformations}")
@@ -1002,7 +1002,7 @@
              self.dh.unload_buses(ex_dp)  # unload buses
              # get immediate superior/inferior block (based on the desired direction)
              succeeded,migrant = blck_ref.get_tasks_by_name(move_to_apply.get_kernel_ref().get_task_name())
-@@ -1613,17 +1862,44 @@
+@@ -1613,17 +1862,45 @@
                  move_to_apply.set_validity(False, "NoMigrantException")
              else:
                  imm_block = self.dh.get_immediate_block_multi_metric(blck_ref,
@@ -1041,6 +1041,7 @@
 +                            move_to_apply.set_swap_dest_block(imm_block) # destination to swap with
 +                            move_to_apply.set_tasks(migrant_tasks)
 +                            move_to_apply.set_customization_type(blck_ref, imm_block)
++                    else:   # if imm block was IP then we can't swap curr block with another IP because non-IP mappable tasks will have no home
 +                        move_to_apply.set_validity(False, "NoMigrantException")
 +                        imm_block_present = blck_ref
 +                else:
@@ -1054,7 +1055,7 @@
          elif move_to_apply.get_transformation_name() in ["split"]:
              # select tasks to migrate
              #self.change_read_task_to_write_if_necessary(ex_dp, sim_dp, move_to_apply, selected_krnl)
-@@ -1641,12 +1917,13 @@
+@@ -1641,12 +1918,13 @@
  
              move_to_apply.set_parallelism_type(parallelism_type)
              move_to_apply.set_tasks(migrant_tasks)
@@ -1074,7 +1075,7 @@
          elif move_to_apply.get_transformation_name() == "migrate":
              if not selected_block.type == "ic":  # ic migration is not supported
                  # check and see if tasks exist (if not, it was a read)
-@@ -1658,7 +1935,6 @@
+@@ -1658,7 +1936,6 @@
                                                                                                                move_to_apply.get_kernel_ref())
  
  
@@ -1082,7 +1083,7 @@
                  move_to_apply.set_parallelism_type(parallelism_type)
                  move_to_apply.set_locality_type(locality_type)
                  self.dh.unload_buses(ex_dp)  # unload buses
-@@ -1668,13 +1944,12 @@
+@@ -1668,13 +1945,12 @@
                  if not found_blck_to_mig_to:
                      move_to_apply.set_validity(False, "NoMigrantException")
                      imm_block_present = blck_ref
@@ -1097,7 +1098,7 @@
                      move_to_apply.set_tasks(migrant_tasks)
                      move_to_apply.set_dest_block(imm_block_present)
              else:
-@@ -1741,7 +2016,6 @@
+@@ -1741,7 +2017,6 @@
                              move_to_apply.set_tasks(migrant_tasks)
                              move_to_apply.set_dest_block(imm_block_present)
  
@@ -1105,7 +1106,7 @@
          move_to_apply.set_breadth_depth(self.SA_current_breadth, self.SA_current_depth, self.SA_current_mini_breadth)  # set depth and breadth (for debugging/ plotting)
          return move_to_apply, total_transformation_cnt
  
-@@ -1870,6 +2144,10 @@
+@@ -1870,6 +2145,10 @@
  
                      return sim_dp_to_select_from[0], False
  
@@ -1116,7 +1117,7 @@
  
      # find the best design from a list
      def find_best_design_others(self, sim_stat_ex_dp_dict, sim_dp_stat_ann_delta_energy_dict, sim_dp_stat_ann_delta_energy_dict_all_metrics, best_sim_dp_stat_so_far, best_ex_dp_so_far):
-@@ -1949,7 +2227,6 @@
+@@ -1949,7 +2228,6 @@
                  else:
                      return designs_to_consider[0], True # can be smarter here
  
@@ -1124,7 +1125,7 @@
      # use simulated annealing to pick the next design(s).
      # Use this link to understand simulated annealing (SA) http://www.cs.cmu.edu/afs/cs.cmu.edu/project/learn-43/lib/photoz/.g/we /glossary/anneal.html
      # cur_temp: current temperature for simulated annealing
-@@ -1969,7 +2246,6 @@
+@@ -1969,7 +2247,6 @@
                  return krnl.get_task_name()
  
  
@@ -1132,7 +1133,7 @@
          # get the kernel of interest using this for now to collect cached designs
          best_sim_selected_metric, metric_prob_dict,best_sorted_metric_dir = self.select_metric(best_sim_dp_so_far_stats.dp)
          best_sim_move_dir = self.select_dir(best_sim_dp_so_far_stats.dp, best_sim_selected_metric)
-@@ -2065,10 +2341,7 @@
+@@ -2065,10 +2342,7 @@
                  if not sim_dp_.move_applied == None:
                      sim_dp_.move_applied.print_info()
                      print("energy" + str(energy))
@@ -1144,7 +1145,7 @@
  
          # if any negative (desired move) value is detected or there is a design in the new batch
          #  that meet the budget, but the previous best design didn't, we have at least one improved solution
-@@ -2084,30 +2357,30 @@
+@@ -2084,30 +2358,30 @@
              self.krnel_stagnation_ctr +=1
              self.des_stag_ctr += 1
              if self.krnel_stagnation_ctr > config.max_krnel_stagnation_ctr:
@@ -1196,7 +1197,7 @@
  
          # initialize selected_sim_dp
          selected_sim_dp = best_sim_dp_so_far_stats.dp
-@@ -2186,24 +2459,23 @@
+@@ -2186,24 +2460,23 @@
          metric_to_target , metric_prob_dict, sorted_metric_dir = self.select_metric(best_sim_dp_so_far_stats.dp)
          include_cost_in_distance = best_sim_dp_so_far_stats.fits_budget(1) or (len(new_designs_meeting_budget) > 0) or self.is_cleanup_iter() or (len(new_designs_meeting_budget_with_dram)>0)
          if include_cost_in_distance:
@@ -1226,7 +1227,7 @@
  
  
  
-@@ -2216,16 +2488,17 @@
+@@ -2216,16 +2489,17 @@
          else:
              sim_dp_to_look_at = sim_dp_stat_list
  
@@ -1248,7 +1249,7 @@
                  sim_dp_stat_ann_delta_energy_dict_all_metrics[sim_dp_stat] = new_design_energy_all_metrics - ann_energy_best_dp_so_far_all_metrics
  
          # changing the seed for random selection
-@@ -2239,14 +2512,11 @@
+@@ -2239,14 +2513,11 @@
          print("all the designs tried")
          for el, energy in sim_dp_stat_ann_delta_energy_dict_all_metrics.items():
              print("----------------")
@@ -1265,7 +1266,7 @@
  
          # if any negative (desired move) value is detected or there is a design in the new batch
          #  that meet the budget, but the previous best design didn't, we have at least one improved solution
-@@ -2265,27 +2535,32 @@
+@@ -2265,27 +2536,32 @@
                  self.krnel_rnk_to_consider = min(self.krnel_rnk_to_consider + 1, len(best_sim_dp_so_far_stats.get_kernels()) -1)
                  krnel_not_to_consider = get_kernel_not_to_consider(self.krnels_not_to_consider, best_sim_dp_so_far_stats.dp.move_applied, sim_dp_to_look_at[-1].dp.move_applied)
                  if not krnel_not_to_consider == None:
@@ -1316,7 +1317,7 @@
  
          # initialize selected_sim_dp
          selected_sim_dp = best_sim_dp_so_far_stats.dp
-@@ -2422,11 +2697,11 @@
+@@ -2422,11 +2698,11 @@
          if config.simulation_method == "power_knobs":
              sim_dp = self.dh.convert_to_sim_des_point(ex_dp)
              power_knob_sim_dp = self.dh.convert_to_sim_des_point(ex_dp)
@@ -1330,7 +1331,7 @@
  
          # Does the actual simulation
          t = time.time()
-@@ -2439,7 +2714,7 @@
+@@ -2439,7 +2715,7 @@
          sim_dp.set_depth_number(self.SA_current_depth)
          sim_dp.set_simulation_time(sim_time)
  
@@ -1339,7 +1340,7 @@
          #exit(0)
          return sim_dp
  
-@@ -2564,14 +2839,21 @@
+@@ -2564,14 +2840,21 @@
              return self.sim_one_design(ex_dp, database) # evaluation the design directly
          elif config.eval_mode == "statistical":
              # generate a population (geneate_sample), evaluate them and reduce to some statistical indicator
@@ -1363,7 +1364,7 @@
          else:
              print("mode" + config.eval_mode + " is not defined for eval design")
  
-@@ -2587,12 +2869,8 @@
+@@ -2587,12 +2870,8 @@
          # iterate till you can make a directory
          while True:
              date_time = datetime.now().strftime('%m-%d_%H-%M_%S')
@@ -1377,7 +1378,7 @@
              if not os.path.isdir(result_folder):
                  os.makedirs(result_folder)
                  collection_ctr = self.name_ctr # used to realize which results to compare
-@@ -2656,6 +2934,7 @@
+@@ -2656,6 +2935,7 @@
      def gen_neigh_and_eval(self, des_tup):
          # "delete this later"
          print("------ depth ------")
@@ -1385,7 +1386,7 @@
          # generate on neighbour
          move_strt_time = time.time()
          ex_dp, move_to_try,total_trans_cnt = self.gen_one_neigh(des_tup)
-@@ -2669,14 +2948,19 @@
+@@ -2669,14 +2949,19 @@
          if move_to_try.get_transformation_name() == "identity" or not move_to_try.is_valid():
              # if nothing has changed, just copy the sim from before
              sim_dp = des_tup[1]
@@ -1412,7 +1413,7 @@
  
          # collect the moves for debugging/visualization
          if config.DEBUG_MOVE:
-@@ -2687,21 +2971,18 @@
+@@ -2687,21 +2972,18 @@
  
          # visualization and verification
          if config.VIS_GR_PER_GEN:
@@ -1437,7 +1438,7 @@
  
          return (ex_dp, sim_dp), total_trans_cnt
  
-@@ -2710,17 +2991,8 @@
+@@ -2710,17 +2992,8 @@
          ctr = 0
          while True and ctr <100:
              ctr +=1
@@ -1457,7 +1458,7 @@
  
      # ------------------------------
      # Functionality:
-@@ -2732,18 +3004,19 @@
+@@ -2732,18 +3005,19 @@
      #       breadth: the breadth according to which to generate designs  (used for breadth wise search)
      #       depth: the depth according to which to generate designs (used for look ahead)
      # ------------------------------
@@ -1481,7 +1482,7 @@
              # iterate on depth (generate one neighbour and evaluate it)
              self.SA_current_depth += 1
              #des_tup_new, possible_des_cnt = self.gen_neigh_and_eval(des_tup)
-@@ -2755,7 +3028,7 @@
+@@ -2755,7 +3029,7 @@
              des_tup_list.append(des_tup_new)
  
              # do more coverage if needed
@@ -1490,7 +1491,7 @@
              for i in range(0, max(possible_des_cnt,1)-1):
                  self.SA_current_mini_breadth += 1
                  des_tup_new_breadth, _ = self.gen_neigh_and_eval(des_tup)
-@@ -2799,6 +3072,9 @@
+@@ -2799,6 +3073,9 @@
          # generate some neighbouring design points and evaluate them
          des_tup_list =[]
          #config.SA_depth = 3*len(self.so_far_best_ex_dp.get_hardware_graph().get_blocks_by_type("mem"))+ len(self.so_far_best_ex_dp.get_hardware_graph().get_blocks_by_type("ic"))
@@ -1500,7 +1501,7 @@
          self.gen_some_neighs_and_eval((self.so_far_best_ex_dp, self.so_far_best_sim_dp), config.SA_breadth, config.SA_depth, des_tup_list)
          exploration_and_simulation_approximate_time_per_iteration = (time.time() - strt)/max(len(des_tup_list), 1)
          #print("sim time + neighbour generation per design point " + str((time.time() - strt)/max(len(des_tup_list), 1)))
-@@ -2841,7 +3117,19 @@
+@@ -2841,7 +3118,19 @@
      # ------------------------------
      def explore_one_design(self):
          self.so_far_best_ex_dp = self.init_ex_dp
@@ -1510,18 +1511,18 @@
 +            self.init_ex_dp, self.init_sim_dp = self.so_far_best_ex_dp, self.so_far_best_sim_dp = self.eval_design(self.so_far_best_ex_dp, self.database)
 +        else:
 +            self.init_sim_dp = self.so_far_best_sim_dp = self.eval_design(self.so_far_best_ex_dp, self.database)
-+        
++
 +        for b in self.so_far_best_sim_dp.dp_rep.get_hardware_graph().blocks:
 +            if b.type == "mem":
 +                start_bytes = b.area_in_bytes_list[0]
 +                end_bytes = b.area_in_bytes_list[-1]
 +                assert np.isclose(start_bytes, 0.) and np.isclose(end_bytes, 0.), f"** blk {b.instance_name} start bytes: {start_bytes}, end bytes: {end_bytes} not equal to 0!"
-+                
++
 +        self.init_sim_dp.dp_stats.print_summary(prefix="Init ")
          this_itr_ex_sim_dp_dict = {}
          this_itr_ex_sim_dp_dict[self.so_far_best_ex_dp] = self.so_far_best_sim_dp
          #self.init_sim_dp = self.eval_design(self.so_far_best_ex_dp, self.database)
-@@ -2905,7 +3193,7 @@
+@@ -2905,7 +3194,7 @@
                  move_validity = ma.is_valid()
                  ref_des_dist_to_goal_all = ma.get_logs("ref_des_dist_to_goal_all")
                  ref_des_dist_to_goal_non_cost = ma.get_logs("ref_des_dist_to_goal_non_cost")
@@ -1530,7 +1531,7 @@
                  neighbouring_design_space_size = sim_dp.get_neighbouring_design_space_size()
                  workload = ma.get_logs("workload")
              else:  # happens at the very fist iteration
-@@ -2941,6 +3229,7 @@
+@@ -2941,6 +3230,7 @@
              block_area_break_down = self.convert_dictionary_to_parsable_csv_with_underline(sim_dp.dp_stats.SOC_area_dict)
              routing_complexity = sim_dp.dp_rep.get_hardware_graph().get_routing_complexity()
              area_non_dram = sim_dp.dp_stats.get_system_complex_area_stacked_dram()["non_dram"]
@@ -1538,7 +1539,7 @@
              area_dram = sim_dp.dp_stats.get_system_complex_area_stacked_dram()["dram"]
              simple_topology = sim_dp.dp_rep.get_hardware_graph().get_simplified_topology_code()
              channel_cnt = sim_dp.dp_rep.get_hardware_graph().get_number_of_channels()
-@@ -2974,16 +3263,17 @@
+@@ -2974,16 +3264,17 @@
                      "transformation selection time" : transformation_selection_time,
                  "design duplication time": pickling_time,
                  "neighbour selection time": self.neighbour_selection_time,
@@ -1560,7 +1561,7 @@
                      "best_des_so_far_area_non_dram": self.so_far_best_sim_dp.dp_stats.get_system_complex_area_stacked_dram()["non_dram"],
                      "best_des_so_far_area_dram": self.so_far_best_sim_dp.dp_stats.get_system_complex_area_stacked_dram()["dram"],
                      #"area_breakdown_subtype":self.convert_dictionary_to_parsable_csv_with_semi_column(sim_dp.dp_stats.SOC_area_subtype_dict.keys()),
-@@ -3013,6 +3303,7 @@
+@@ -3013,6 +3304,7 @@
                      "sub_block_area_break_down":sub_block_area_break_down,
                  "task_cnt": task_cnt,
                  "channel_cnt":channel_cnt,
@@ -1568,7 +1569,7 @@
                  "area_dram":area_dram,
                  "area_non_dram":area_non_dram
              }
-@@ -3116,7 +3407,7 @@
+@@ -3116,7 +3408,7 @@
                  greedy_ctr_run += 1
          elif moos_greedy_mode == "phv":
              phv_improvement = True
@@ -1577,7 +1578,7 @@
              local_pareto = {}
              phv_so_far = 0
              while phv_improvement and greedy_ctr_run < config.MOOS_GREEDY_CTR_RUN:
-@@ -3266,9 +3557,10 @@
+@@ -3266,9 +3558,10 @@
          self.so_far_best_ex_dp = self.init_ex_dp
          self.so_far_best_sim_dp = self.eval_design(self.so_far_best_ex_dp, self.database)
          self.init_sim_dp = self.eval_design(self.so_far_best_ex_dp, self.database)
@@ -1589,7 +1590,7 @@
          if config.RUN_VERIFICATION_PER_GEN or config.RUN_VERIFICATION_PER_IMPROVMENT or config.RUN_VERIFICATION_PER_NEW_CONFIG:
              self.gen_verification_data(self.so_far_best_sim_dp, self.so_far_best_ex_dp)
  
-@@ -3276,8 +3568,8 @@
+@@ -3276,8 +3569,8 @@
          #num_of_workloads = len(self.so_far_best_sim_dp.dp_stats.database.get_workloads_last_task().values())
          # initializing the tree
          self.pareto_global = {}
@@ -1600,7 +1601,7 @@
  
          pareto_global_child_evaluation = self.evaluate_pareto(self.pareto_global, hyper_volume_ref)
          root_node = self.moos_tree.get_root()
-@@ -3347,6 +3639,8 @@
+@@ -3347,6 +3640,8 @@
  
                  # get new pareto design and merge, and evaluate (update the tree)
                  self.log_data(this_itr_ex_sim_dp_dict)
@@ -1609,7 +1610,7 @@
                  self.collect_stats(this_itr_ex_sim_dp_dict)
                  pareto_designs = self.get_pareto_designs(this_itr_ex_sim_dp_dict)
                  pareto_global_child.update(pareto_designs)
-@@ -3385,7 +3679,7 @@
+@@ -3385,7 +3680,7 @@
                  self.so_far_best_sim_dp  = self.cur_best_sim_dp
  
                  print("reason to terminate is:" + reason_to_terminate)
@@ -1618,7 +1619,7 @@
                  if not (self.last_des_trail == None):
                      if self.last_des_trail == None:
                          self.last_des_trail = (
-@@ -3405,7 +3699,7 @@
+@@ -3405,7 +3700,7 @@
  
              print(" >>>>> des" + " latency:" + str(self.so_far_best_sim_dp.dp_stats.get_system_complex_metric("latency")))
  
@@ -1627,7 +1628,7 @@
              stat_result = self.so_far_best_sim_dp.dp_stats
              if stat_result.fits_budget(1):
                  should_terminate = True
-@@ -3430,11 +3724,15 @@
+@@ -3430,11 +3725,15 @@
      # ------------------------------
      def explore_ds(self):
          self.so_far_best_ex_dp = self.init_ex_dp
@@ -1646,7 +1647,7 @@
          if config.RUN_VERIFICATION_PER_GEN or config.RUN_VERIFICATION_PER_IMPROVMENT or config.RUN_VERIFICATION_PER_NEW_CONFIG:
              self.gen_verification_data(self.so_far_best_sim_dp, self.so_far_best_ex_dp)
  
-@@ -3443,7 +3741,11 @@
+@@ -3443,7 +3742,11 @@
          cur_temp = config.annealing_max_temp
  
          while True:
@@ -1659,7 +1660,7 @@
              self.total_iteration_ctr += len(list(this_itr_ex_sim_dp_dict.keys()))
  
              # collect profiling information about moves and designs generated
-@@ -3459,9 +3761,7 @@
+@@ -3459,9 +3762,7 @@
              self.neighbour_selection_time = t2-t1
              self.log_data(this_itr_ex_sim_dp_dict)
              print("-------:):):):):)----------")
@@ -1670,7 +1671,7 @@
  
              if  not self.cur_best_sim_dp.move_applied == None:
                  self.cur_best_sim_dp.move_applied.print_info()
-@@ -3482,8 +3782,11 @@
+@@ -3482,8 +3783,11 @@
                  should_terminate, reason_to_terminate = self.update_ctrs()
  
              if should_terminate:
@@ -1683,7 +1684,7 @@
                  if not (self.last_des_trail == None):
                      if self.last_des_trail == None:
                          self.last_des_trail = (copy.deepcopy(self.so_far_best_sim_dp), copy.deepcopy(self.so_far_best_sim_dp))
-@@ -3496,7 +3799,6 @@
+@@ -3496,7 +3800,6 @@
                  if config.VIS_MOVE_TRAIL:
                      plot.des_trail_plot(self.des_trail_list, self.move_profile, des_per_iteration)
                      plot.move_profile_plot(self.move_profile)
@@ -1691,7 +1692,7 @@
                  return
              cur_temp -= config.annealing_temp_dec
              self.vis_move_trail_ctr += 1
-@@ -3523,7 +3825,7 @@
+@@ -3523,7 +3826,7 @@
      # Variables:
      #      explorations_start_time: to exploration start time used to determine the end-to-end exploration time.
      # -----------------------------
@@ -1700,7 +1701,7 @@
          exploration_end_time = time.time()
          total_sim_time = exploration_end_time - exploration_start_time
          print("*********************************")
-@@ -3546,7 +3848,7 @@
+@@ -3546,7 +3849,7 @@
          print("The design meet the latency requirement: " + str(self.so_far_best_sim_dp.dp_stats.get_system_complex_metric("latency") < config.objective_budget))
          vis_hardware.vis_hardware(self.so_far_best_ex_dp)
          if config.VIS_FINAL_RES:
@@ -1709,7 +1710,7 @@
  
          # write the output
          home_dir = os.getcwd()
-@@ -3641,10 +3943,13 @@
+@@ -3641,10 +3944,13 @@
          tsks_left_to_optimize = list(set(tasks_not_meeting_budget) - set(self.krnels_not_to_consider))
  
          if stat_result.fits_budget(1) :
@@ -1726,7 +1727,7 @@
              reason_to_terminate = "met the budget"
              should_terminate = True
          elif self.des_stag_ctr > self.DES_STAG_THRESHOLD:
-@@ -3668,6 +3973,7 @@
+@@ -3668,6 +3974,7 @@
              else:
                  reason_to_terminate = "exploration (total itr_ctr) iteration threshold reached"
              should_terminate = True
@@ -1734,7 +1735,7 @@
  
          self.counters.update(self.krnel_rnk_to_consider, self.krnel_stagnation_ctr, self.fitted_budget_ctr, self.des_stag_ctr,
                               self.krnels_not_to_consider, self.population_generation_cnt, self.found_any_improvement, self.total_iteration_ctr)
-@@ -3675,6 +3981,82 @@
+@@ -3675,6 +3982,82 @@
          print(">>>>> total iteration count is: " + str(self.total_iteration_ctr))
          return should_terminate, reason_to_terminate
  
@@ -1774,7 +1775,7 @@
 +            for krnl in krnls:
 +                krnl_prob_dict[krnl] = 1
 +        return krnl_prob_dict
-+    
++
 +    def select_kernel(self, ex_dp, sim_dp, selected_metric, move_sorted_metric_dir):
 +
 +        # get each kernel's contributions
@@ -1817,7 +1818,7 @@
  
  class moosTreeNode:
      def __init__(self, k_intervals):
-@@ -3858,13 +4240,3 @@
+@@ -3858,13 +4241,3 @@
          """
          return best_node
  
